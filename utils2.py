@@ -11,6 +11,8 @@ import torch.nn.functional as F
 from torch.utils.data import Subset, DataLoader, random_split, WeightedRandomSampler
 import torch.optim as optim
 from torchvision import datasets, transforms
+import matplotlib
+#matplotlib.use("Agg")        # ← must come before pyplot is imported, suppresses errors when tearing down (which are harmless)
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
@@ -37,7 +39,7 @@ transform = transforms.Compose(
 # To filter logging coming from the Simulation Engine
 # so it's more readable in notebooks
 from logging import ERROR
-backend_setup = {"init_args": {"logging_level": ERROR, "log_to_driver": False}}
+backend_setup = {"init_args": {"logging_level": INFO, "log_to_driver": True}}
 
 
 class SimpleModel(nn.Module):
@@ -52,6 +54,112 @@ class SimpleModel(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
+
+class ImprovedModel(nn.Module): #more powerful and agressive with 4 layers and LeakyRelu instead to prevent zeroing of values
+    def __init__(self):
+        super(ImprovedModel, self).__init__()
+        # 38 inputs → 128 hidden, 4 layers
+        self.fc1 = nn.Linear(n_features, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 64)
+        self.fc4 = nn.Linear(64, n_classes)
+        #Batch Normaliation
+        self.bn1 = nn.BatchNorm1d(256)
+        self.bn2 = nn.BatchNorm1d(128)
+        self.bn3 = nn.BatchNorm1d(64)
+        # 30% Dropout to prevent overfitting
+        self.dropout = nn.Dropout(0.3)
+        #Leaky Relu
+        self.act = nn.LeakyReLU(0.1)
+
+
+    def forward(self, x):
+        # x will already be shape [batch, n_features], no flatten needed, go through neural network
+        x = self.act(self.bn1(self.fc1(x)))
+        x = self.dropout(x)
+        x = self.act(self.bn2(self.fc2(x)))
+        x = self.dropout(x)
+        x = self.act(self.bn3(self.fc3(x)))
+        x = self.dropout(x)
+        x = self.fc4(x)
+        return x
+
+
+
+
+class ResidualModel(nn.Module): #Model with a Skip Connection to learn identity mappings better, stops gradients from vanishing
+    def __init__(self):
+        super(ResidualModel, self).__init__()
+        # first projection
+        self.fc_in = nn.Linear(n_features, 128)
+        self.bn_in = nn.BatchNorm1d(128)
+        # residual block 1: 128 → 128 → 128
+        self.res1 = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.3),
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
+        )
+        # residual block 2: 128 → 128 → 128
+        self.res2 = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.3),
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
+        )
+        # final classifier
+        self.fc_out = nn.Linear(128, n_classes)
+
+    def forward(self, x):
+        # input → hidden
+        x = F.leaky_relu(self.bn_in(self.fc_in(x)), 0.1)
+        # block 1 with skip
+        r1 = self.res1(x)
+        x = F.leaky_relu(x + r1, 0.1)
+        # block 2 with skip
+        r2 = self.res2(x)
+        x = F.leaky_relu(x + r2, 0.1)
+        # to logits
+        return self.fc_out(x)
+
+
+
+class HighwayLayer(nn.Module):
+    def __init__(self, size, f=F.relu):
+        super().__init__()
+        self.transform = nn.Linear(size, size)
+        self.gate      = nn.Linear(size, size)
+        self.activation = f
+
+    def forward(self, x):
+        T = torch.sigmoid(self.gate(x))          # transform gate, a sigmoid between (0,1)
+        H = self.activation(self.transform(x))    # candidate transform, the 'new features'
+        return H * T + x * (1 - T)                # highway combination, x is the carry input and (1 - T) is the carry gate (opposite of transform kinda)
+
+class HighwayModel(nn.Module): # an evolved version of ResidualModel by learning, for each feature, whether to transform it or carry forward
+    def __init__(self, num_highways=2):
+        super(HighwayModel, self).__init__()
+        self.input = nn.Sequential(
+            nn.Linear(n_features, 128),
+            nn.BatchNorm1d(128),
+            nn.LeakyReLU(0.1),
+        )
+        self.highways = nn.ModuleList([
+            HighwayLayer(128, f=F.leaky_relu) for _ in range(num_highways)
+        ])
+        self.dropout = nn.Dropout(0.3)
+        self.out = nn.Linear(128, n_classes)
+
+    def forward(self, x):
+        x = self.input(x)
+        for hw in self.highways:
+            x = hw(x)
+            x = self.dropout(x)
+        return self.out(x)
 
 
 def train_model(model, train_set, epochz):
@@ -92,6 +200,9 @@ def train_model(model, train_set, epochz):
     optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
 
     model.train()
+    best_loss = float("inf")
+    stagnant_epochs = 0
+    patience = 3  # stop after 3 non‐improving epochs
     for epoch in range(num_epochs):
         running_loss = 0.0
         for inputs, labels in train_loader:
@@ -101,6 +212,22 @@ def train_model(model, train_set, epochz):
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
+        avg_loss = running_loss / len(train_loader)
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            stagnant_epochs = 0
+            #log(INFO, f"Early Stopper: Improvement Made! Reset patience")
+        else:
+            stagnant_epochs += 1
+            #log(INFO, f"Early Stopper: No improvement for {stagnant_epochs} epoch(s)")
+            if stagnant_epochs >= patience:
+                log(INFO, f"Early Stopper: Stopping on epoch {epoch+1}")
+                break #stop going through Epochs
+
+
+
+
 
 
 def evaluate_model(model, test_set):

@@ -3,12 +3,13 @@ import flwr as fl
 from torch.utils.data import TensorDataset, DataLoader
 import torch
 from flwr.common import Context, ndarrays_to_parameters
-from flwr.server.strategy import FedAvg
+from flwr.server.strategy import FedAvg, DifferentialPrivacyClientSideAdaptiveClipping
 from flwr.server import ServerApp, ServerConfig, ServerAppComponents
 from FLT_Loader2 import n_classes, n_features, load_dataset, split_data_across_clients
 
 from flwr.client import Client, ClientApp, NumPyClient
 from flwr.simulation import run_simulation
+from flwr.client.mod import adaptiveclipping_mod
 
 from utils2 import *
 
@@ -46,9 +47,9 @@ def get_weights(net):
 #declare Epoch law
 def fit_config(server_round: int):
     config_dict = {
-        "local_epochs": 4 if server_round < 75 else 10,
+        "local_epochs": 20 if server_round < 15 else 100,
     }
-    return config_dict
+    return config_dict #find a way to stop epoch running when accuracy stagnates/drops
 
 #Connect the training in the pipeline using the Flower Client
 class FlowerClient(NumPyClient):
@@ -79,17 +80,20 @@ class FlowerClient(NumPyClient):
 
 # Client function, simulates every client on a single machine
 def client_fn(context: Context) -> Client:
-    net = SimpleModel()
+    net = HighwayModel()
     partition_id = int(context.node_config["partition-id"])
     client_train = train_sets[int(partition_id)]
     client_test = test_sets[int(partition_id)]
     return FlowerClient(net, client_train, client_test).to_client()
 #Create an instance of the ClientApp
-client = ClientApp(client_fn)
+client = ClientApp(
+    client_fn, 
+    #mods=[adaptiveclipping_mod], #modifiers
+)
 
 #Server-Side Evaluation
 def evaluate(server_round, parameters, config):
-    net = SimpleModel()
+    net = HighwayModel()
     set_weights(net, parameters)
 
     # 2) Flatten all clients' samples into one list of (features, label)
@@ -108,7 +112,7 @@ def evaluate(server_round, parameters, config):
     #log(INFO, "test accuracy on Alaska: %.4f", accuracy2)
     #log(INFO, "test accuracy on Arizona: %.4f", accuracy3)
 
-    if server_round == 100: #Final Round
+    if server_round == 20: #Final Round
         cm = compute_confusion_matrix(net, full_test_dataset)
         plot_confusion_matrix(cm, "Final Global Model")
 
@@ -116,20 +120,25 @@ def evaluate(server_round, parameters, config):
     return loss, {"accuracy": accuracy}
 
 
-net = SimpleModel()
+net = HighwayModel()
 params = ndarrays_to_parameters(get_weights(net))
 
 def server_fn(context: Context): #Federated Averaging
-    strategy = FedAvg(
-        fraction_fit=0.2, #Fraction of avaliable clients selected for training
+    strategy_no_dp = FedAvg(
+        fraction_fit=0.25, #Fraction of avaliable clients selected for training, ~12
         fraction_evaluate=0.4, #Fraction of avaliable clients selected for evaluation
         initial_parameters=params, #initial model weights
         evaluate_fn=evaluate, #function to use for server-side evaluation
         on_fit_config_fn=fit_config, #Epoch decleration
     )
-    config=ServerConfig(num_rounds=100)
+    #strategy = DifferentialPrivacyClientSideAdaptiveClipping(
+    #    strategy_no_dp, #wrap FedAvg
+    #    noise_multiplier=0.05,
+    #    num_sampled_clients=12, #equal to fraction_fit
+    #)
+    config=ServerConfig(num_rounds=20)
     return ServerAppComponents(
-        strategy=strategy,
+        strategy=strategy_no_dp,
         config=config,
     )
 #Create an instance of severapp

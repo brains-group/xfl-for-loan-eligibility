@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 
 # Dimensions of categorical features and classes
 cat_sizes = [3, 13, 6, 7, 9]
-n_classes = 4
+n_classes = 8
 n_features = sum(cat_sizes)
 
 def one_hot(idx, length):
@@ -43,7 +43,7 @@ def load_dataset(path):
                 vec += one_hot(feature5, cat_sizes[4])
 
                 # parse label
-                learningObj = int(float(row[84]))
+                learningObj = int(float(row[95]))
                 learningObj = learningObj if 0 <= learningObj < n_classes else 0
 
                 data.append((identifier, (vec, learningObj)))
