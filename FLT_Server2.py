@@ -63,7 +63,7 @@ def get_weights(net):
 #declare Epoch law
 def fit_config(server_round: int):
     config_dict = {
-        "local_epochs": 20 if server_round < ro*0.9 else 50,
+        "local_epochs": 10 if server_round < ro*0.9 else 30,
     }
     return config_dict #find a way to stop epoch running when accuracy stagnates/drops
 
@@ -145,13 +145,14 @@ def evaluate(server_round, parameters, config):
     ]
     #Chosen States to keep track of
     chosen = ("Washington", "Kansas", "Arkansas", "New Hampshire", "Pennsilvania", "Texas", "Massachusetts", "Colorado", "New York", "California", "Florida", "Hawaii")
+    assert len(feature_names) == len(cat_sizes), f"feature_names {feature_names} and cat_sizes {cat_sizes} mismatch!"
 
     for idx, client_data in enumerate(test_sets):
         if 0 <= idx < len(states):
             stat = states[idx]
         else:
             stat = "N/A"
-        if stat in chosen :
+        if stat in chosen:
             # Build TensorDataset for this client
             feats = torch.tensor([x for x, _ in client_data], dtype=torch.float32)
             labs  = torch.tensor([y for _, y in client_data], dtype=torch.long)
@@ -164,6 +165,18 @@ def evaluate(server_round, parameters, config):
             client_metric_history[stat]["f1"].append(f1_c)
             client_metric_history[stat]["auc"].append(auc_c)
 
+        if server_round == ro: #final round save data
+            # Build TensorDataset for this client
+            feats = torch.tensor([x for x, _ in client_data], dtype=torch.float32)
+            labs  = torch.tensor([y for _, y in client_data], dtype=torch.long)
+            ds    = TensorDataset(feats, labs)
+            # Compute metrics
+            loss_c, acc_c, recall_c, f1_c, auc_c = evaluate_model(net, ds)
+            finalMetrics["accuracy"].append(acc_c) #Save Client Metrics
+            finalMetrics["recall"].append(recall_c)
+            finalMetrics["f1"].append(f1_c)
+            finalMetrics["auc"].append(auc_c)
+
 
 
 
@@ -174,6 +187,7 @@ def evaluate(server_round, parameters, config):
     log(INFO, "test recall on all States: %.4f", recall)
     log(INFO, "test F1 on all States: %.4f", f1)
     log(INFO, "test AUC on all States: %.4f", auc)
+
 
     if server_round == ro: #Final Round
         cm = compute_confusion_matrix(net, full_test_dataset)
@@ -192,6 +206,30 @@ def evaluate(server_round, parameters, config):
             feature_names=feature_names,
             title="SHAP Feature Importance",
         )
+
+        #plot_shap_summary_grouped(
+        #    model=net,
+        #    dataset=full_test_dataset,
+        #    max_examples=500,
+        #)
+
+        plot_shap_summary_grouped_owen(
+            model=net,
+            dataset=full_test_dataset,
+            max_examples=3000,
+        )
+        plot_shap_summary_grouped_owen2(
+            model=net,
+            dataset=full_test_dataset,
+            max_examples=3000,
+        )
+
+        plot_choropleth(states, finalMetrics["accuracy"], title="Final Round Accuracy Map", name="choropleth_acc.pdf")
+        plot_choropleth(states, finalMetrics["recall"], title="Final Round Recall Map", name="choropleth_rec.pdf")
+        plot_choropleth(states, finalMetrics["f1"], title="Final Round F1 Map", name="choropleth_f1.pdf")
+        plot_choropleth(states, finalMetrics["auc"], title="Final Round AUC Map", name="choropleth_auc.pdf")
+
+
 
 
         o = os.path.dirname(csv_path)

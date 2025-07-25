@@ -15,6 +15,8 @@ import matplotlib
 matplotlib.use("Agg")        # ← must come before pyplot is imported, suppresses errors when tearing down (which are harmless)
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+from matplotlib.patches import Patch
+from matplotlib.colors import LinearSegmentedColormap
 import os
 os.environ["JUPYTER_PLATFORM_DIRS"] = "1"
 from sklearn.metrics import confusion_matrix, recall_score, f1_score, roc_auc_score
@@ -26,13 +28,31 @@ from logging import INFO, ERROR
 import random
 from FLT_Loader2 import n_features, n_classes, cat_sizes
 import shap
+import math
+import pandas as pd
+import plotly.express as px
+import scipy.cluster.hierarchy as sch
+from scipy.spatial.distance import squareform
 
 
-ro = 50 #Number of rounds
+# 1) Raise Flower/Ray logger levels
+#for name in [
+#    "flwr", "flwr.server", "flwr.simulation", "flwr.common",
+#    "ray", "ray.worker", "ray._private"
+#]:
+#    logging.getLogger(name).setLevel(logging.ERROR)
+
+# 2) Stop Flower’s console handler from emitting INFO
+#console_handler.setLevel(logging.ERROR)
+
+
+ro = 500 #Number of rounds
 csv_path = '/data/LorenzoData/NFCS2021StateData220627.csv' #CSV Path
+#ada = True #Adam Optimizer Strategy Boolean
 
 feature_names = [
-    "Gender/Age Bin",
+    "Gender/Age Bin by Gender",
+    "Gender/Age Bin by Age",
     "Education",
     "Marital Status",
     "Living Arrangements",
@@ -45,12 +65,22 @@ feature_names = [
     "Financial Education",
 ]
 
+
+
 client_metric_history = defaultdict(lambda: {
     "accuracy": [],
     "recall": [],
     "f1": [],
     "auc": [],
 })
+
+finalMetrics = {
+    "accuracy": [],
+    "recall":   [],
+    "f1":       [],
+    "auc":      [],
+}
+
 
 class InfoFilter(logging.Filter):
     def filter(self, record):
@@ -67,7 +97,7 @@ transform = transforms.Compose(
 # To filter logging coming from the Simulation Engine
 # so it's more readable in notebooks
 from logging import ERROR
-backend_setup = {"init_args": {"logging_level": INFO, "log_to_driver": True, "local_mode": False}} #run everything in-process
+backend_setup = {"init_args": {"logging_level": ERROR, "log_to_driver": False, "local_mode": False}} #run everything in-process
 
 
 class SimpleModel(nn.Module):
@@ -211,7 +241,7 @@ class HighwayModel2(nn.Module):
         n_features: int,
         n_classes:  int,
         hidden_size: int = 128,
-        num_highways: int = 12, #number of layers
+        num_highways: int = 8, #number of layers
         activation:   nn.Module = nn.PReLU(),   # default to PReLU (learnable slope)
         dropout:      float = 0.3,
     ):
@@ -330,7 +360,12 @@ def train_model(model, train_set, epochz):
     #class_weights = class_weights.clamp(max=30)
 
     # 3a) Weighted loss, boosted to counteract oversampled data
-    boosted_weights = (class_weights**1.5).clamp(max=50.0) # boost weight power prevent from going to infinity
+    #if ada == False:
+    #    boosted_weights = (class_weights**1.01).clamp(max=100.0) # boost weight power prevent from going to infinity, SGD style
+    #else:
+    boosted_weights = (class_weights**1.1835).clamp(max=100.0) # Adam style, 1.1905 for 50 rounds is good
+
+
     criterion = nn.CrossEntropyLoss(weight=boosted_weights)
 
     # 3b) (optional) Oversample minority classes via sampler
@@ -351,8 +386,12 @@ def train_model(model, train_set, epochz):
 
 
     #criterion = nn.CrossEntropyLoss()
-    #optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    #if ada == False:
+    #    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    #else:
     optimizer = optim.Adam(model.parameters(), lr=0.005)
+
+
 
     model.train()
     best_loss = float("inf")
@@ -482,14 +521,15 @@ def plot_confusion_matrix(cm, title, path=None):
 
 
 def plot_accuracy_graph(round_accuracies, title, path=None):
-    rounds = list(range(1, len(round_accuracies)))
+    steps = max(1, math.ceil(ro//30))
+    rounds = list(range(1, len(round_accuracies), steps))
     fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_accuracies[1:], marker="o")
+    ax.plot(rounds, round_accuracies[1:][::steps], marker="o")
     ax.set_title(title)
     ax.set_xlabel("Round")
     ax.set_ylabel("Global Accuracy")
     ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
     ax.set_xticks(rounds)
     ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
     ax.set_ylim(0, 1)
@@ -507,14 +547,15 @@ def plot_accuracy_graph(round_accuracies, title, path=None):
 
 
 def plot_recall_graph(round_recalls, title, path=None):
-    rounds = list(range(1, len(round_recalls)))
+    steps = max(1, math.ceil(ro//30))
+    rounds = list(range(1, len(round_recalls), steps))
     fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_recalls[1:], marker="o")
+    ax.plot(rounds, round_recalls[1:][::steps], marker="o")
     ax.set_title(title)
     ax.set_xlabel("Round")
     ax.set_ylabel("Global Recall")
     ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
     ax.set_xticks(rounds)
     ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
     ax.set_ylim(0, 1)
@@ -531,14 +572,15 @@ def plot_recall_graph(round_recalls, title, path=None):
 
 
 def plot_f1_graph(round_f1s, title, path=None):
-    rounds = list(range(1, len(round_f1s)))
+    steps = max(1, math.ceil(ro//30))
+    rounds = list(range(1, len(round_f1s), steps))
     fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_f1s[1:], marker="o")
+    ax.plot(rounds, round_f1s[1:][::steps], marker="o")
     ax.set_title(title)
     ax.set_xlabel("Round")
     ax.set_ylabel("Global F1")
     ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
     ax.set_xticks(rounds)
     ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
     ax.set_ylim(0, 1)
@@ -555,14 +597,15 @@ def plot_f1_graph(round_f1s, title, path=None):
 
 
 def plot_auc_graph(round_aucs, title, path=None):
-    rounds = list(range(1, len(round_aucs)))
+    steps = max(1, math.ceil(ro//30))
+    rounds = list(range(1, len(round_aucs), steps))
     fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_aucs[1:], marker="o")
+    ax.plot(rounds, round_aucs[1:][::steps], marker="o")
     ax.set_title(title)
     ax.set_xlabel("Round")
     ax.set_ylabel("Global AUC")
     ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
     ax.set_xticks(rounds)
     ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
     ax.set_ylim(0, 1)
@@ -579,18 +622,25 @@ def plot_auc_graph(round_aucs, title, path=None):
 
 
 def plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, title, path=None):
-    rounds = list(range(1, len(round_f1s)))
+    step = max(1, math.ceil(ro//30))
+    rounds = list(range(1, len(round_f1s), step))
+    # Subsample metrics to match 'rounds'
+    accs = round_accuracies[1::step]
+    recalls = round_recalls[1::step]
+    f1s = round_f1s[1::step]
+    aucs = round_aucs[1::step]
+
     fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_accuracies[1:], marker="o", label="Precision", color="tab:red")
-    ax.plot(rounds, round_recalls[1:], marker="s", label="Recall", color="tab:blue")
-    ax.plot(rounds, round_f1s[1:], marker="^", label="F1", color="tab:green")
-    ax.plot(rounds, round_aucs[1:], marker="d", label="AUC", color="tab:purple")
+    ax.plot(rounds, accs, marker="o", label="Precision", color="tab:red")
+    ax.plot(rounds, recalls, marker="s", label="Recall", color="tab:blue")
+    ax.plot(rounds, f1s, marker="^", label="F1", color="tab:green")
+    ax.plot(rounds, aucs, marker="d", label="AUC", color="tab:purple")
     ax.set_title(title)
     ax.set_xlabel("Round")
     ax.set_ylabel("Global Metric")
     ax.grid(True)
     ax.legend(loc="lower left", title="Metrics")
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30)))) #Instead of every round do every tot/25 rounds
     ax.set_xticks(rounds)
     ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
     ax.set_ylim(0, 1)
@@ -619,18 +669,25 @@ def plot_all_client(
     each mapping to a list of length = num_rounds+1 (including round 0).
     """
     # Rounds 0,1,2,...,N
-    rounds = list(range(1, len(history["accuracy"])))
+    step = max(1, math.ceil(ro//30))
+    rounds = list(range(1, len(history["accuracy"]), step))
+    # Subsample metrics to match 'rounds'
+    accs = history["accuracy"][1::step]
+    recalls = history["recall"][1::step]
+    f1s = history["f1"][1::step]
+    aucs = history["auc"][1::step]
+
     fig, ax = plt.subplots(figsize=(min(len(rounds)/4, 14), 4))
-    ax.plot(rounds, history["accuracy"][1:], marker="o", label="Accuracy")
-    ax.plot(rounds, history["recall"][1:],    marker="s", label="Recall")
-    ax.plot(rounds, history["f1"][1:],        marker="^", label="F1")
-    ax.plot(rounds, history["auc"][1:],       marker="d", label="AUC")
+    ax.plot(rounds, accs, marker="o", label="Accuracy")
+    ax.plot(rounds, recalls,    marker="s", label="Recall")
+    ax.plot(rounds, f1s,        marker="^", label="F1")
+    ax.plot(rounds, aucs,       marker="d", label="AUC")
 
     ax.set_title(f"{state_name} Metrics Per Round")
     ax.set_xlabel("Round")
     ax.set_ylabel("Value")
     ax.set_ylim(0, 1)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
     ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
     ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
     ax.grid(True)
@@ -689,24 +746,62 @@ def plot_shap_feature_importance(
     shap_vals = explainer.shap_values(background, nsamples=nsample)
     # shap_vals is a list (one per output class), for binary shap_vals[1] is what we want:
     v = np.abs(shap_vals) if not isinstance(shap_vals, list) else np.abs(shap_vals[1])
+    #v = shap_vals if not isinstance(shap_vals, list) else shap_vals[1]
 
     # 6) collapse one-hot groups down to 11 features
     #    => sum mean‐abs across each group
     groups = []
+    stds = []
     start = 0
-    for size in cat_sizes:  # cat_sizes = [12,7,6,5,7,11,9,4,3,3,4]
-        group_mean = v[:, start : start + size].mean(axis=0).sum()
-        groups.append(group_mean)
+
+    for size in cat_sizes:  # cat_sizes = [12,12,7,6,5,7,11,9,4,3,3,4]
+        group_sample = v[:, start : start + size]
+        groups.append(group_sample.mean(axis=0).sum())
+        stds.append(group_sample.std(axis=0).sum())
         start += size
+
+    #print("DEBUG cat_sizes len:", len(cat_sizes), "values:", cat_sizes)
+    #print("DEBUG groups len:", len(groups))
+    #print("DEBUG feature_names len:", len(feature_names), "values:", feature_names)
+    assert len(groups) == len(feature_names), "Mismatch groups vs feature_names"
+
+    covs = [#Relative variation
+        (s / m) if m != 0 else 0.0
+        for m, s in zip(groups, stds)
+    ]
+    #covs = covs / max(covs) #make as a unit figure?
+
 
     # 7) plot
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(feature_names, groups)
+    bars = ax.bar(
+    feature_names,
+    groups,
+    #yerr=covs,
+    #capsize=4,
+    #error_kw={
+    #    "ecolor": "black",    # errorbar color
+    #    "elinewidth": 1,      # errorbar line width
+    #    "alpha": 0.4          # make the error‐bars semi‐transparent
+    #},
+)
     ax.set_xticklabels(feature_names, rotation=45, ha="right")
     ax.set_title(title)
-    ax.set_ylabel("Sum of mean |SHAP|")
+    ax.set_ylabel("Sum of mean SHAP")
     ax.grid(True, axis="y")
     fig.tight_layout()
+
+    #8) put the numeric std above each bar
+    for bar, s in zip(bars, covs):
+        h = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            h + 0.01 * (ax.get_ylim()[1] - ax.get_ylim()[0]),  # a little padding
+            f"{s:.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 
     os.makedirs(path, exist_ok=True)
     fname = os.path.join(path, "feature_importance.pdf")
@@ -762,21 +857,52 @@ def plot_shap_feature_importance_client(
         else np.abs(shap_vals[1])
     )
 
-    # ——— 6) collapse one‐hot groups into 11 real features ———
+    # ——— 6) collapse one‐hot groups into 12 real features ———
     groups = []
+    stds = []
     start = 0
-    for size in cat_sizes:  # e.g. [12,7,6,5,7,11,9,4,3,3,4]
+    for size in cat_sizes:  # e.g. [12,12,7,6,5,7,11,9,4,3,3,4]
         groups.append(v[:, start : start + size].mean(axis=0).sum())
+        stds.append(v[:, start : start + size].std(axis=0).sum())
         start += size
+
+    covs = [#Relative variation
+        (s / m) if m != 0 else 0.0
+        for m, s in zip(groups, stds)
+    ]
+    #covs = covs / max(covs) #make as a unit figure?
 
     # ——— 7) plot + save ———
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(feature_names, groups)
+    bars = ax.bar(
+    feature_names,
+    groups,
+    #yerr=covs,
+    #capsize=4,
+    #error_kw={
+    #    "ecolor": "black",    # errorbar color
+    #    "elinewidth": 1,      # errorbar line width
+    #    "alpha": 0.4          # make the error‐bars semi‐transparent
+    #},
+)
     ax.set_xticklabels(feature_names, rotation=45, ha="right")
     ax.set_title(title)
     ax.set_ylabel("Sum of mean |SHAP|")
     ax.grid(True, axis="y")
     fig.tight_layout()
+
+    #8) put the numeric std above each bar
+    for bar, s in zip(bars, covs):
+        h = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            h + 0.01 * (ax.get_ylim()[1] - ax.get_ylim()[0]),  # a little padding
+            f"{s:.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
 
     fname = os.path.join(out_dir, f"{state_name}_feature_importance.pdf")
     fig.savefig(fname, bbox_inches="tight")
@@ -838,3 +964,426 @@ def plot_scatter(
     fp = os.path.join(path, grName)
     fig.savefig(fp, bbox_inches="tight")
     plt.close(fig)
+
+
+
+
+
+
+
+
+def plot_shap_summary_grouped(
+    model: nn.Module,
+    dataset: torch.utils.data.TensorDataset,
+    max_examples: int = 2000,
+    background_size: int = 200,
+    nsamples: int = 200,
+    path: Optional[str] = None,
+    file_name: str = "shap_summary_grouped.pdf",
+):
+    """
+    Produce a SHAP summary (beeswarm) plot *grouped* over one-hot encoded
+    categorical feature blocks.
+
+    Coloring (feature value) is the argmax index (0..size-1) of the active
+    category inside each one-hot block, giving variation and meaningful color.
+
+    Args:
+        model: Trained PyTorch model.
+        dataset: TensorDataset(features, labels).
+        max_examples: Max samples to compute/plot SHAP for (subsampled if larger).
+        background_size: Size of background set for KernelExplainer.
+        nsamples: SHAP KernelExplainer nsamples parameter.
+        path: Directory to save output (defaults beside csv_path if None).
+        file_name: Output PDF filename.
+    """
+
+    if path is None:
+        out_dir = os.path.dirname(csv_path)
+    else:
+        out_dir = path
+    os.makedirs(out_dir, exist_ok=True)
+
+    X = dataset.tensors[0].cpu().numpy()
+    n_total, input_dim = X.shape
+    assert sum(cat_sizes) == input_dim, (
+        f"Sum of cat_sizes ({sum(cat_sizes)}) != input_dim ({input_dim})"
+    )
+    assert len(cat_sizes) == len(feature_names), (
+        f"cat_sizes length {len(cat_sizes)} != feature_names length {len(feature_names)}"
+    )
+
+    # Subsample for tractability
+    if n_total > max_examples:
+        sel = np.random.choice(n_total, max_examples, replace=False)
+        X_sample = X[sel]
+    else:
+        X_sample = X
+
+    # Background subset
+    if n_total > background_size:
+        bg_idx = np.random.choice(n_total, background_size, replace=False)
+        background = X[bg_idx]
+    else:
+        background = X
+
+    # Prediction function (probability of class 1; adjust if different target)
+    def predict_fn(x_batch: np.ndarray) -> np.ndarray:
+        with torch.no_grad():
+            logits = model(torch.from_numpy(x_batch).float())
+            probs = torch.softmax(logits, dim=1)[:, 1]
+        return probs.cpu().numpy()
+
+    # SHAP KernelExplainer
+    explainer = shap.KernelExplainer(predict_fn, background)
+    shap_vals = explainer.shap_values(X_sample, nsamples=nsamples)
+    # For binary classification shap returns list [class0, class1]
+    if isinstance(shap_vals, list):
+        shap_vals = shap_vals[1]  # (M, input_dim)
+
+    # ---- Aggregate SHAP values over one-hot blocks (mean(abs) per column then sum) ----
+    grouped_shap_rows = []
+    start = 0
+    for size in cat_sizes:
+        end = start + size
+        block = shap_vals[:, start:end]  # (M, size)
+        # Use mean absolute per component then sum to get a single SHAP per group per sample
+        group_shap = block.mean(axis=1)  # shape (M,)
+        grouped_shap_rows.append(group_shap)
+        start = end
+    # Shape: (M, G)
+    grouped_shap = np.vstack(grouped_shap_rows).T
+
+    # ---- Create "feature values" by argmax index inside each one-hot block ----
+    grouped_inputs_rows = []
+    start = 0
+    for size in cat_sizes:
+        end = start + size
+        block = X_sample[:, start:end]  # (M, size) one-hot
+        # Argmax returns index of the active category
+        cat_idx = np.argmax(block, axis=1).astype(float)
+        # (Optional) if a row could be all-zero you could set those to -1:
+        # all_zero = block.sum(axis=1) == 0
+        # cat_idx[all_zero] = -1
+        grouped_inputs_rows.append(cat_idx)
+        start = end
+    grouped_inputs = np.vstack(grouped_inputs_rows).T  # (M, G)
+
+    # ---- Plot summary ----
+    plt.figure(figsize=(8, max(4, 0.55 * len(feature_names))))
+    shap.summary_plot(
+        grouped_shap,
+        features=grouped_inputs,
+        feature_names=feature_names,
+        show=False,
+        plot_type="dot",
+        max_display=len(feature_names),
+        color_bar=True,
+    )
+    plt.title("Grouped SHAP Summary (color = category index)", fontsize=12)
+    out_path = os.path.join(out_dir, file_name)
+    plt.savefig(out_path, bbox_inches="tight")
+    plt.close()
+
+
+
+
+
+def plot_choropleth(
+    state_names: list[str],
+    vals: list[float],
+    title: str = "Federated Learning by State",
+    path: Optional[str] = None,
+    name: Optional[str] = "choropleth",
+) -> None:
+    """
+    Draw and save a U.S. choropleth map where each state is colored
+    by its accuracy value.
+
+    Args:
+        state_names: Full state names + "District of Columbia".
+        vals: Same-length list of floats in [0,1].
+        title: Title for the map.
+        path: Directory to save the output. Defaults next to csv_path.
+    """
+    if path is None:
+        out_dir = os.path.dirname(csv_path)
+    else:
+        out_dir = path
+    os.makedirs(out_dir, exist_ok=True)
+    # 1) Map full state names to postal codes
+    state_abbrev = {
+        'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+        'Colorado':'CO','Connecticut':'CT','Delaware':'DE','District of Columbia':'DC',
+        'Florida':'FL','Georgia':'GA','Hawaii':'HI','Idaho':'ID','Illinois':'IL',
+        'Indiana':'IN','Iowa':'IA','Kansas':'KS','Kentucky':'KY','Louisiana':'LA',
+        'Maine':'ME','Maryland':'MD','Massachusetts':'MA','Michigan':'MI',
+        'Minnesota':'MN','Mississippi':'MS','Missouri':'MO','Montana':'MT',
+        'Nebraska':'NE','Nevada':'NV','New Hampshire':'NH','New Jersey':'NJ',
+        'New Mexico':'NM','New York':'NY','North Carolina':'NC','North Dakota':'ND',
+        'Ohio':'OH','Oklahoma':'OK','Oregon':'OR','Pennsylvania':'PA',
+        'Rhode Island':'RI','South Carolina':'SC','South Dakota':'SD',
+        'Tennessee':'TN','Texas':'TX','Utah':'UT','Vermont':'VT','Virginia':'VA',
+        'Washington':'WA','West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY'
+    }
+
+    df = pd.DataFrame({
+        "state_name": state_names,
+        "abbr": [state_abbrev.get(s, "") for s in state_names],
+        "Percentage": vals,
+    })
+    if df["abbr"].eq("").any():
+        missing = df.loc[df["abbr"]=="", "state_name"].tolist()
+        raise ValueError(f"Unknown state names: {missing}")
+
+    # 2) Build and show the choropleth
+    lo, hi = df["Percentage"].min()-0.005, df["Percentage"].max()+0.005 #Clamping Values
+    ticks = np.linspace(lo, hi, 6)  # 6 labels incl. top
+    fig = px.choropleth(
+        df,
+        locations="abbr",
+        locationmode="USA-states",
+        color="Percentage",
+        scope="usa",
+        color_continuous_scale="Viridis",
+        range_color=(lo, hi),
+        #labels={"accuracy": "Accuracy"},
+        title=title,
+    )
+
+    fig.update_layout(
+        coloraxis_colorbar=dict(
+            title="Percentage",
+            tickmode="array",
+            tickvals=ticks,
+            ticktext=[f"{t:.3f}" for t in ticks],  # or format as %: f"{t:.1%}"
+            ticks="outside",
+        )
+    )
+
+    # 3) Save to file
+    save_path = os.path.join(out_dir, name)
+    #try:
+    #    fig.write_image(save_path, width=800, height=500)
+    #except Exception as e:
+    html_path = os.path.splitext(save_path)[0] + ".html"
+    #print(f"[plot_choropleth] static export failed ({e}). Saving HTML -> {html_path}")
+    fig.write_html(html_path)
+
+
+
+
+
+
+
+
+def plot_shap_summary_grouped_owen(
+    model: nn.Module,
+    dataset: torch.utils.data.TensorDataset,
+    max_examples: int = 2000,
+    background_size: int = 200,
+    nsamples: int = 200,
+    path: Optional[str] = None,
+    max_display: Optional[int] = None,
+    file_name_prefix: str = "shap_summary_owen",
+    base_cmap: str = "tab20",
+) -> None:
+
+    groupings = [
+        ["Gender/Age Bin by Gender", "Gender/Age Bin by Age", "Marital Status", "Living Arrangements"],
+        ["Employment", "Web/App Help", "Health Insurance", "Annual Income"],
+        ["Education", "Financial Children", "Stock Investments", "Financial Education"],
+    ]
+
+    def generate_detailed_feature_names(cat_sizes, feature_names):
+        all_feature_names = []
+        for group_name, size in zip(feature_names, cat_sizes):
+            for i in range(size):
+                all_feature_names.append(f"{group_name}__{i}")
+        return all_feature_names
+
+    all_feature_names = generate_detailed_feature_names(cat_sizes, feature_names)
+
+    if path is None:
+        path = os.path.dirname(csv_path)
+
+    # Sample data
+    X = dataset.tensors[0].cpu().numpy()
+    X = X[:max_examples]
+    if background_size < len(X):
+        idx = np.random.choice(len(X), background_size, replace=False)
+        background = X[idx]
+    else:
+        background = X
+
+    X_df = pd.DataFrame(X)
+    background_df = pd.DataFrame(background)
+
+    # Feature clustering
+    corr = X_df.corr().fillna(0)
+    distance = 1 - np.abs(corr)
+    distance = distance.replace([np.inf, -np.inf], 1).fillna(1)
+    linkage = sch.linkage(squareform(distance.values, checks=False), method="ward")
+
+    # SHAP Partition masker
+    masker = shap.maskers.Partition(X_df, clustering=linkage)
+
+    # Prediction function
+    def predict(X_numpy):
+        with torch.no_grad():
+            inputs = torch.from_numpy(X_numpy).float()
+            logits = model(inputs)
+            probs = torch.softmax(logits, dim=1)
+            return probs[:, 1].cpu().numpy()
+
+    explainer = shap.explainers.Partition(predict, masker)
+    shap_values = explainer(X_df, max_evals=nsamples)
+    shap_values.feature_names = all_feature_names
+
+    # Plot by group
+    start_idx = 0
+    for i, group in enumerate(groupings):
+        indices = []
+        for g in group:
+            base_idx = feature_names.index(g)
+            group_size = cat_sizes[base_idx]
+            indices.extend(range(start_idx, start_idx + group_size))
+            start_idx += group_size
+
+        # Subset manually
+        values = shap_values.values[:, indices]
+        data = shap_values.data[:, indices]
+        names = [shap_values.feature_names[i] for i in indices]
+
+        # Create new explanation object
+        subset = shap.Explanation(
+            values,
+            data=data,
+            feature_names=names,
+            base_values=shap_values.base_values,
+        )
+
+        plt.figure(figsize=(10, 6))
+        shap.plots.beeswarm(subset, max_display=max_display, color=plt.get_cmap("coolwarm"))
+        out_path = os.path.join(path, f"{file_name_prefix}_group{i+1}.pdf")
+        plt.savefig(out_path, bbox_inches="tight")
+        plt.close()
+
+
+
+
+
+
+
+
+
+#Owen grouping by feature
+def group_owen_values(owen_values: np.ndarray):
+    """
+    Given Owen values per feature (shape [n_samples, 84]),
+    returns grouped Owen values by original categorical feature
+    (shape [n_samples, 12]).
+    """
+    # Category sizes in the same order as one-hot encoding
+
+    # Build start-end indices for each group
+    indices = []
+    start = 0
+    for size in cat_sizes:
+        end = start + size
+        indices.append((start, end))
+        start = end
+
+    # Sum (or mean) Owen values across each group
+    grouped = np.stack([
+        np.abs(owen_values[:, start:end]).sum(axis=1)  # or mean(axis=1)
+        for start, end in indices
+    ], axis=1)
+
+    return grouped
+
+def plot_shap_summary_grouped_owen2(
+    model: nn.Module,
+    dataset: torch.utils.data.TensorDataset,
+    max_examples: int = 2000,
+    background_size: int = 200,
+    nsamples: int = 200,
+    path: Optional[str] = None,
+    max_display: Optional[int] = None,
+    file_name: str = "shap_summary_owen.pdf",
+    base_cmap: str = "tab20",
+) -> None:
+    if path is None:
+        path = os.path.dirname(csv_path)
+
+    # Sample data
+    X = dataset.tensors[0].cpu().numpy()
+    X = X[:max_examples] #beeswarm
+    if background_size < len(X):
+        idx = np.random.choice(len(X), background_size, replace=False)
+        background = X[idx]
+    else:
+        background = X
+
+    # Convert background and X to DataFrame for clustering
+    X_df = pd.DataFrame(X)
+    #Tentative remove useless columns, might not work
+    #X_df = X_df.loc[:, X_df.std() > 0]
+    background_df = pd.DataFrame(background)
+
+    # Step 1: Create correlation-based feature clustering
+    corr = X_df.corr()
+    # Replace NaNs with 0
+    corr = corr.fillna(0)
+    distance = 1 - np.abs(corr)
+    # Clip any remaining NaNs
+    distance = distance.replace([np.inf, -np.inf], 1)
+    distance = distance.fillna(1)
+    condensed_distance = squareform(distance.values, checks=False)
+    linkage = sch.linkage(squareform(condensed_distance), method="ward")
+
+
+    # Step 2: Create SHAP Partition masker with clustering
+    masker = shap.maskers.Partition(X_df, clustering=linkage)
+
+    # Step 3: Define prediction function
+    def predict(X_numpy):
+        with torch.no_grad():
+            inputs = torch.from_numpy(X_numpy).float()
+            logits = model(inputs)
+            probs = torch.softmax(logits, dim=1)
+            return probs[:, 1].cpu().numpy()  # Class 1 probability
+
+    # Step 4: Create Owen-value-based Partition explainer
+    explainer = shap.explainers.Partition(predict, masker)#creates a Partition SHAP/Owen explainer using your prediction function and feature clustering.
+    shap_values = explainer(X_df, max_evals=nsamples)# actually runs the Owen value computation for each sample in X_df.
+
+    #Step 4b: Group the Owen values categorically (by each feature)
+    grouped_vals = group_owen_values(shap_values.values)
+    # Melt grouped values for seaborn
+    records = []
+    for i, fname in enumerate(feature_names):
+        for val in grouped_vals[:, i]:
+            records.append((fname, val))
+    df = pd.DataFrame(records, columns=["Feature", "Owen Value"])
+
+    # Step 5: Plot Owen-value-based SHAP summary (beeswarm)
+    # Beeswarm plot (violin-based)
+    plt.figure(figsize=(10, 6))
+    sns.violinplot(
+        data=df,
+        y="Feature",
+        x="Owen Value",
+        scale="width",
+        inner="point",
+        palette=base_cmap,
+        linewidth=1
+    )
+    plt.title("Grouped Owen Value Summary Plot")
+    plt.tight_layout()
+
+
+    # Save to PDF
+    out_path = os.path.join(path, file_name)
+    plt.savefig(out_path, bbox_inches="tight")
+    plt.close()

@@ -1,0 +1,53 @@
+Per-client metrics for final global model (round 200):
+
+Alabama | loss: 0.6274, acc: 0.5976, recall: 0.5294, F1: 0.3529, AUC: 0.6425
+Alaska | loss: 0.6048, acc: 0.7174, recall: 0.6250, F1: 0.4348, AUC: 0.6521
+Arizona | loss: 0.6207, acc: 0.6863, recall: 0.5000, F1: 0.3846, AUC: 0.6482
+Arkansas | loss: 0.5920, acc: 0.6944, recall: 0.6087, F1: 0.5600, AUC: 0.7196
+California | loss: 0.5827, acc: 0.6940, recall: 0.5714, F1: 0.3604, AUC: 0.7270
+Colorado | loss: 0.5690, acc: 0.7475, recall: 0.6316, F1: 0.4898, AUC: 0.8053
+Connecticut | loss: 0.5807, acc: 0.7303, recall: 0.5000, F1: 0.3684, AUC: 0.6924
+Delaware | loss: 0.5409, acc: 0.7568, recall: 0.3125, F1: 0.2703, AUC: 0.6895
+District of Columbia | loss: 0.5436, acc: 0.7660, recall: 0.5625, F1: 0.4500, AUC: 0.7340
+Florida | loss: 0.7494, acc: 0.6711, recall: 0.6154, F1: 0.3902, AUC: 0.6862
+Georgia | loss: 0.6098, acc: 0.6786, recall: 0.6957, F1: 0.5424, AUC: 0.7334
+Hawaii | loss: 0.5399, acc: 0.8349, recall: 0.4444, F1: 0.3077, AUC: 0.7156
+Idaho | loss: 0.5605, acc: 0.7788, recall: 0.5862, F1: 0.5763, AUC: 0.8095
+Illinois | loss: 0.6186, acc: 0.6981, recall: 0.5000, F1: 0.3333, AUC: 0.6285
+Indiana | loss: 0.5979, acc: 0.6827, recall: 0.5882, F1: 0.3774, AUC: 0.6971
+Iowa | loss: 0.5827, acc: 0.7300, recall: 0.6471, F1: 0.4490, AUC: 0.7980
+Kansas | loss: 0.5672, acc: 0.7831, recall: 0.7368, F1: 0.6087, AUC: 0.8232
+Kentucky | loss: 0.6050, acc: 0.6667, recall: 0.7273, F1: 0.5000, AUC: 0.7709
+Louisiana | loss: 0.6091, acc: 0.6854, recall: 0.6316, F1: 0.4615, AUC: 0.7008
+Maine | loss: 0.6423, acc: 0.6860, recall: 0.4706, F1: 0.3721, AUC: 0.6471
+Maryland | loss: 0.5833, acc: 0.7000, recall: 0.3750, F1: 0.3333, AUC: 0.6641
+Massachusetts | loss: 0.5747, acc: 0.7849, recall: 0.5455, F1: 0.3750, AUC: 0.6441
+Michigan | loss: 0.5734, acc: 0.7723, recall: 0.5000, F1: 0.3784, AUC: 0.7077
+Minnesota | loss: 0.5796, acc: 0.6923, recall: 0.3333, F1: 0.2222, AUC: 0.6245
+Mississippi | loss: 0.5847, acc: 0.7647, recall: 0.7273, F1: 0.6154, AUC: 0.7893
+Missouri | loss: 0.6308, acc: 0.6790, recall: 0.5263, F1: 0.4348, AUC: 0.6613
+Montana | loss: 0.5940, acc: 0.7403, recall: 0.7333, F1: 0.5238, AUC: 0.8129
+Nebraska | loss: 0.5616, acc: 0.7843, recall: 0.5714, F1: 0.5217, AUC: 0.7572
+Nevada | loss: 0.6572, acc: 0.6667, recall: 0.5500, F1: 0.3729, AUC: 0.6272
+New Hampshire | loss: 0.5554, acc: 0.8295, recall: 0.5455, F1: 0.4444, AUC: 0.7308
+New Jersey | loss: 0.5473, acc: 0.8488, recall: 0.7692, F1: 0.6061, AUC: 0.7977
+New Mexico | loss: 0.6156, acc: 0.6916, recall: 0.4545, F1: 0.3774, AUC: 0.6567
+New York | loss: 0.5641, acc: 0.7176, recall: 0.5455, F1: 0.3333, AUC: 0.7015
+North Carolina | loss: 0.5469, acc: 0.7400, recall: 0.7500, F1: 0.5357, AUC: 0.8087
+North Dakota | loss: 0.5822, acc: 0.8105, recall: 0.6000, F1: 0.5714, AUC: 0.8097
+Ohio | loss: 0.5494, acc: 0.7253, recall: 0.7000, F1: 0.5283, AUC: 0.7887
+Oklahoma | loss: 0.6103, acc: 0.7229, recall: 0.6000, F1: 0.5106, AUC: 0.7357
+Oregon | loss: 0.5956, acc: 0.7137, recall: 0.6176, F1: 0.3853, AUC: 0.7538
+Pennsylvania | loss: 0.6228, acc: 0.6875, recall: 0.3333, F1: 0.2424, AUC: 0.5417
+Rhode Island | loss: 0.5349, acc: 0.8354, recall: 0.2857, F1: 0.2353, AUC: 0.6329
+South Carolina | loss: 0.5681, acc: 0.7500, recall: 0.6316, F1: 0.5000, AUC: 0.7902
+South Dakota | loss: 0.5646, acc: 0.7479, recall: 0.5217, F1: 0.4444, AUC: 0.7160
+Tennessee | loss: 0.6175, acc: 0.6667, recall: 0.4000, F1: 0.2051, AUC: 0.5554
+Texas | loss: 0.6497, acc: 0.6744, recall: 0.6667, F1: 0.5882, AUC: 0.7357
+Utah | loss: 0.5726, acc: 0.7234, recall: 0.6154, F1: 0.3810, AUC: 0.8329
+Vermont | loss: 0.5630, acc: 0.7609, recall: 0.5833, F1: 0.3889, AUC: 0.7125
+Virginia | loss: 0.5692, acc: 0.7434, recall: 0.5926, F1: 0.5246, AUC: 0.7696
+Washington | loss: 0.5341, acc: 0.8272, recall: 0.8750, F1: 0.5000, AUC: 0.8716
+West Virginia | loss: 0.5982, acc: 0.6848, recall: 0.5652, F1: 0.4727, AUC: 0.7196
+Wisconsin | loss: 0.6442, acc: 0.6400, recall: 0.4828, F1: 0.4375, AUC: 0.6610
+Wyoming | loss: 0.6013, acc: 0.6796, recall: 0.4500, F1: 0.3529, AUC: 0.6485

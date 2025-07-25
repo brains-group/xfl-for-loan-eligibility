@@ -3,7 +3,7 @@ import random
 from collections import Counter, defaultdict
 
 # Dimensions of categorical features and classes
-cat_sizes = [12, 8, 6, 5, 7, 11, 9, 4, 3, 3, 4]
+cat_sizes = [12, 12, 8, 6, 5, 7, 11, 9, 4, 3, 3, 4]
 n_classes = 3
 n_features = sum(cat_sizes)
 
@@ -22,7 +22,29 @@ def load_dataset(path): #Inwon hyperparameter optimization, use raytune to run e
                 # parse categories from raw CSV
                 identifier = int(row[1]) # StateQ
 
-                feature1 = int(row[6])-1   # Gender/Age Bin
+                feature1 = int(row[6])-1   # Gender/Age Bin ordered by gender
+                feature1b = int(row[6])-1   #Gender/Age Bin ordered by age
+                if feature1==1:
+                    feature1b = 2
+                if feature1==2:
+                    feature1b = 4
+                if feature1==3:
+                    feature1b = 6
+                if feature1==4:
+                    feature1b = 8
+                if feature1==5:
+                    feature1b = 10
+                if feature1==6:
+                    feature1b = 1
+                if feature1==7:
+                    feature1b = 3
+                if feature1==8:
+                    feature1b = 5
+                if feature1==9:
+                    feature1b = 7
+                if feature1==10:
+                    feature1b = 9
+
                 feature2 = int(row[8])-1   # Education
                 feature3 = int(row[9])-1   # Marital Status
                 feature4 = int(row[10])-1  # Living Arrangements
@@ -60,30 +82,32 @@ def load_dataset(path): #Inwon hyperparameter optimization, use raytune to run e
 
                 # clamp if out-of-range
                 feature1 = feature1 if 0 <= feature1 < cat_sizes[0] else 0
-                feature2 = feature2 if 0 <= feature2 < cat_sizes[1] else 0
-                feature3 = feature3 if 0 <= feature3 < cat_sizes[2] else 0
-                feature4 = feature4 if 0 <= feature4 < cat_sizes[3] else 0
-                feature5 = feature5 if 0 <= feature5 < cat_sizes[4] else 0
-                feature6 = feature6 if 0 <= feature6 < cat_sizes[5] else 0
-                feature7 = feature7 if 0 <= feature7 < cat_sizes[6] else 0
-                feature8 = feature8 if 0 <= feature8 < cat_sizes[7] else 0
-                feature9 = feature9 if 0 <= feature9 < cat_sizes[8] else 0
-                feature10 = feature10 if 0 <= feature10 < cat_sizes[9] else 0
-                feature11 = feature11 if 0 <= feature11 < cat_sizes[10] else 0
+                feature1b = feature1b if 0 <= feature1b < cat_sizes[1] else 0
+                feature2 = feature2 if 0 <= feature2 < cat_sizes[2] else 0
+                feature3 = feature3 if 0 <= feature3 < cat_sizes[3] else 0
+                feature4 = feature4 if 0 <= feature4 < cat_sizes[4] else 0
+                feature5 = feature5 if 0 <= feature5 < cat_sizes[5] else 0
+                feature6 = feature6 if 0 <= feature6 < cat_sizes[6] else 0
+                feature7 = feature7 if 0 <= feature7 < cat_sizes[7] else 0
+                feature8 = feature8 if 0 <= feature8 < cat_sizes[8] else 0
+                feature9 = feature9 if 0 <= feature9 < cat_sizes[9] else 0
+                feature10 = feature10 if 0 <= feature10 < cat_sizes[10] else 0
+                feature11 = feature11 if 0 <= feature11 < cat_sizes[11] else 0
 
                 # one-hot encode features
                 vec = []
                 vec += one_hot(feature1, cat_sizes[0])
-                vec += one_hot(feature2, cat_sizes[1])
-                vec += one_hot(feature3, cat_sizes[2])
-                vec += one_hot(feature4, cat_sizes[3])
-                vec += one_hot(feature5, cat_sizes[4])
-                vec += one_hot(feature6, cat_sizes[5])
-                vec += one_hot(feature7, cat_sizes[6])
-                vec += one_hot(feature8, cat_sizes[7])
-                vec += one_hot(feature9, cat_sizes[8])
-                vec += one_hot(feature10, cat_sizes[9])
-                vec += one_hot(feature11, cat_sizes[10])
+                vec += one_hot(feature1b, cat_sizes[1])
+                vec += one_hot(feature2, cat_sizes[2])
+                vec += one_hot(feature3, cat_sizes[3])
+                vec += one_hot(feature4, cat_sizes[4])
+                vec += one_hot(feature5, cat_sizes[5])
+                vec += one_hot(feature6, cat_sizes[6])
+                vec += one_hot(feature7, cat_sizes[7])
+                vec += one_hot(feature8, cat_sizes[8])
+                vec += one_hot(feature9, cat_sizes[9])
+                vec += one_hot(feature10, cat_sizes[10])
+                vec += one_hot(feature11, cat_sizes[11])
 
                 # parse label
                 learningObj = int(float(row[102])) #Debt Collection
