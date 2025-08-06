@@ -27,9 +27,6 @@ random.seed(42)
 
 raw_data = load_dataset(csv_path)
 
-#counter = Counter(label for _, (_, label) in raw_data)
-#print("Loader label distribution:", counter)
-
 random.shuffle(raw_data)
 split1 = int(0.8 * len(raw_data))
 train_data = raw_data[:split1]
@@ -42,6 +39,11 @@ round_accuracies = []
 round_recalls = []
 round_f1s = []
 round_aucs = []
+comms_log = defaultdict(lambda: {"upload": 0}) #Communication cost logs
+
+tmp_file = "client_comms_tmp.txt"
+if os.path.exists(tmp_file):
+    os.remove(tmp_file)
 
 
 
@@ -56,7 +58,7 @@ def set_weights(net, parameters):
 # Retrieves the parameters from the model
 def get_weights(net):
     ndarrays = [
-        val.cpu().numpy() for _, val in net.state_dict().items()
+        val.cpu().numpy() for _, val in net.state_dict().items() if isinstance(val, torch.Tensor)
     ]
     return ndarrays
 
@@ -83,7 +85,7 @@ class FlowerClient(NumPyClient):
 
     # Train the model
     def fit(self, parameters, config):
-
+        global comms_log
         # If this client has no training data, just echo back the incoming weights
         if len(self.trainset) == 0:
             log(INFO, f"client has no data!")
@@ -94,6 +96,21 @@ class FlowerClient(NumPyClient):
         if self.partition_id == 0:
             log(INFO, f"client trains for {epochs} epochs")
         train_model(self.net, self.trainset, epochs)
+        #calculate upload size in bytes
+        updated_params = get_weights(self.net)
+        upload_cost = sum(param.nbytes for param in updated_params)
+        for i, param in enumerate(updated_params):
+            log(INFO, f"[DEBUG] Upload param {i} size: {param.nbytes} bytes")
+        upload_cost_kb = upload_cost / 1024
+        with open("client_comms_tmp.txt", "a") as f:
+            f.write(f"{self.partition_id},upload,{upload_cost_kb}\n")
+
+        # Store per-client communication cost (you can also aggregate per-round)
+        if self.partition_id not in comms_log:
+            comms_log[self.partition_id] = {"upload": 0}
+        comms_log[self.partition_id]["upload"] += upload_cost
+
+
         return get_weights(self.net), len(self.trainset), {}
 
     # Test the model
@@ -104,11 +121,19 @@ class FlowerClient(NumPyClient):
 
 # Client function, simulates every client on a single machine
 def client_fn(context: Context) -> Client:
+    global comms_log
     net = HighwayModel2(n_features, n_classes)
     partition_id = int(context.node_config["partition-id"])
     client_train = train_sets[int(partition_id)]
     client_test = test_sets[int(partition_id)]
+
+    # Log the initial download of weights
+    initial_params = get_weights(net)
+    download_cost = sum(p.nbytes for p in initial_params)
+
     return FlowerClient(net, client_train, client_test, partition_id).to_client()
+
+
 #Create an instance of the ClientApp
 client = ClientApp(
     client_fn, 
@@ -166,6 +191,28 @@ def evaluate(server_round, parameters, config):
             client_metric_history[stat]["auc"].append(auc_c)
 
         if server_round == ro: #final round save data
+            #write communication costs to text file
+            comms_path = os.path.join(os.path.dirname(csv_path), "communication_costs.txt")
+            client_costs = defaultdict(lambda: {"upload": 0})
+            for cid in range(51):
+                client_costs[cid]  # Access to trigger defaultdict initialization
+            with open(tmp_file, "r") as f:
+                for line in f:
+                    cid, typ, val = line.strip().split(",")
+                    client_costs[int(cid)][typ] += float(val)
+
+            plotCommunication(client_costs=client_costs, in_mb=True) #Communication graph
+            with open(comms_path, "w") as f:
+                f.write("Client Communication Costs (in KB):\n\n")
+                total_upload = 0
+                total_download = 0
+                for cid in sorted(client_costs):
+                    up = client_costs[cid]["upload"]
+                    total_upload += up
+                    upload_mb = client_costs[cid]['upload'] / 1024
+                f.write(f"\nTotal Upload: {total_upload:.2f} KB\n")
+                f.write(f"Total Communication: {total_upload:.2f} KB\n")
+
             # Build TensorDataset for this client
             feats = torch.tensor([x for x, _ in client_data], dtype=torch.float32)
             labs  = torch.tensor([y for _, y in client_data], dtype=torch.long)
@@ -177,28 +224,18 @@ def evaluate(server_round, parameters, config):
             finalMetrics["f1"].append(f1_c)
             finalMetrics["auc"].append(auc_c)
 
-
-
-
     log(INFO, "test accuracy on all States: %.4f", accuracy)
-    #log(INFO, "test accuracy on Alabama: %.4f", accuracy1)
-    #log(INFO, "test accuracy on Alaska: %.4f", accuracy2)
-    #log(INFO, "test accuracy on Arizona: %.4f", accuracy3)
     log(INFO, "test recall on all States: %.4f", recall)
     log(INFO, "test F1 on all States: %.4f", f1)
     log(INFO, "test AUC on all States: %.4f", auc)
 
 
-    if server_round == ro: #Final Round
+    if server_round == ro: #Final Round computations
+        o = os.path.dirname(csv_path)
+        #Write communication costs to text file
         cm = compute_confusion_matrix(net, full_test_dataset)
         plot_confusion_matrix(cm, "Final Global Model: Predicting DCA Visits")
-        plot_accuracy_graph(round_accuracies, "FL Accuracy Per Round")
-        plot_recall_graph(round_recalls, "FL Recall Per Round")
-        plot_f1_graph(round_f1s, "FL F1 Per Round")
-        plot_auc_graph(round_aucs, "FL AUC Per Round")
         plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, "FL Metrics Per Round")
-
-
 
         plot_shap_feature_importance(
             model=net,
@@ -207,32 +244,23 @@ def evaluate(server_round, parameters, config):
             title="SHAP Feature Importance",
         )
 
-        #plot_shap_summary_grouped(
-        #    model=net,
-        #    dataset=full_test_dataset,
-        #    max_examples=500,
-        #)
-
-        plot_shap_summary_grouped_owen(
+        plot_feature_bin_summary_grouped_owen(
             model=net,
             dataset=full_test_dataset,
-            max_examples=3000,
-        )
-        plot_shap_summary_grouped_owen2(
-            model=net,
-            dataset=full_test_dataset,
-            max_examples=3000,
+            max_examples=500,
         )
 
-        plot_choropleth(states, finalMetrics["accuracy"], title="Final Round Accuracy Map", name="choropleth_acc.pdf")
+        plot_feature_summary_grouped_owen(
+            model=net,
+            dataset=full_test_dataset,
+            max_examples=500,
+        )
+
+        plot_choropleth(states, finalMetrics["accuracy"], title="Final Round Precision Map", name="choropleth_acc.pdf")
         plot_choropleth(states, finalMetrics["recall"], title="Final Round Recall Map", name="choropleth_rec.pdf")
         plot_choropleth(states, finalMetrics["f1"], title="Final Round F1 Map", name="choropleth_f1.pdf")
         plot_choropleth(states, finalMetrics["auc"], title="Final Round AUC Map", name="choropleth_auc.pdf")
 
-
-
-
-        o = os.path.dirname(csv_path)
         fp = os.path.join(o, "client_metrics.txt")
         accs = []
         recs = []
@@ -256,7 +284,6 @@ def evaluate(server_round, parameters, config):
                     stat = "N/A"
 
                 f.write(
-                    #f"Client {idx:2d} | "
                     f"{stat} | "
                     f"loss: {loss_c:.4f}, "
                     f"acc: {acc_c:.4f}, "
@@ -268,14 +295,14 @@ def evaluate(server_round, parameters, config):
                 recs.append(recall_c)
                 ffs.append(f1_c)
                 auccs.append(auc_c)
-                #Finally plot State-Specific Data
+                #Plot State-Specific Data
                 if stat in chosen :
                     plot_shap_feature_importance_client(net,ds,feature_names,f"{stat} SHAP Importances",stat)
                     plot_all_client(stat, client_metric_history[stat])
 
 
-        # Now build the scatterplots:
-        plot_scatter(states,accs,recs,"Acc/Rec Scatterplot","Accuracy","Recall", "Scatter1.pdf")
+        # Finally, build the scatterplots:
+        plot_scatter(states,accs,recs,"Pre/Rec Scatterplot","Precision","Recall", "Scatter1.pdf")
         plot_scatter(states,ffs,auccs,"F1/AUC Scatterplot","F1","AUC", "Scatter2.pdf")
         
 
@@ -284,14 +311,11 @@ def evaluate(server_round, parameters, config):
     # 8) Return metrics for Flower
     return loss, {"accuracy": accuracy, "recall": recall, "f1": f1, "auc": auc}
 
-
+#Define network model
 net = HighwayModel2(n_features, n_classes)
 params = ndarrays_to_parameters(get_weights(net))
 
-
-
-
-def server_fn(context: Context): #Federated Averaging
+def server_fn(context: Context): #Federated Averaging, server-side computations
     strategy_no_dp = FedAvg(
         fraction_fit=0.25, #Fraction of avaliable clients selected for training, ~12
         fraction_evaluate=0.4, #Fraction of avaliable clients selected for evaluation
@@ -299,24 +323,20 @@ def server_fn(context: Context): #Federated Averaging
         evaluate_fn=evaluate, #function to use for server-side evaluation
         on_fit_config_fn=fit_config, #Epoch decleration
     )
-    #strategy = DifferentialPrivacyClientSideAdaptiveClipping(
-    #    strategy_no_dp, #wrap FedAvg
-    #    noise_multiplier=0.05,
-    #    num_sampled_clients=12, #equal to fraction_fit
-    #)
     config=ServerConfig(num_rounds=ro)
     return ServerAppComponents(
         strategy=strategy_no_dp,
         config=config,
     )
+
 #Create an instance of severapp
 server = ServerApp(server_fn=server_fn)
 # Initiate the simulation passing the server and client apps
-# Specify the number of super nodes that will be selected on every round
+
+# Specify the number of super nodes that will be selected on every round & run as a simulation
 run_simulation(
     server_app=server,
     client_app=client,
     num_supernodes=51, #number of clients
     backend_config=backend_setup,
 )
-

@@ -4,10 +4,10 @@ from collections import Counter, defaultdict
 
 # Dimensions of categorical features and classes
 cat_sizes = [12, 12, 8, 6, 5, 7, 11, 9, 4, 3, 3, 4]
-n_classes = 3
+n_classes = 3 #total number of learnin objective classes, unused as eval() expects and filters itself
 n_features = sum(cat_sizes)
 
-def one_hot(idx, length):
+def one_hot(idx, length): #one-hot function
     vec = [0] * length
     vec[idx] = 1
     return vec
@@ -24,7 +24,7 @@ def load_dataset(path): #Inwon hyperparameter optimization, use raytune to run e
 
                 feature1 = int(row[6])-1   # Gender/Age Bin ordered by gender
                 feature1b = int(row[6])-1   #Gender/Age Bin ordered by age
-                if feature1==1:
+                if feature1==1:#Categorically sort 1b
                     feature1b = 2
                 if feature1==2:
                     feature1b = 4
@@ -57,7 +57,7 @@ def load_dataset(path): #Inwon hyperparameter optimization, use raytune to run e
                 feature11 = int(row[111])-1# Financial Education
 
 
-                if feature1 < 0:
+                if feature1 < 0: #sanity check for negative values
                     raise ValueError(f"Feature 1 is negative!")
                 if feature2 < 0:
                     raise ValueError(f"Feature 2 is negative!")
@@ -111,13 +111,11 @@ def load_dataset(path): #Inwon hyperparameter optimization, use raytune to run e
 
                 # parse label
                 learningObj = int(float(row[102])) #Debt Collection
-                #print(learningObj)
-                #learningObj = learningObj if 0 <= learningObj < n_classes else 0
 
-                if learningObj > n_classes: #skip certain cases
+                if learningObj > n_classes: #filtering
                     continue
 
-                data.append((identifier, (vec, learningObj)))
+                data.append((identifier, (vec, learningObj)))#Add data point
             except ValueError:
                 continue
     return data

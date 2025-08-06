@@ -1,5 +1,5 @@
 """
-Utility functions and classes for Jupyter Notebooks lessons. 
+Utility functions and classes used in Server for brunt of computation, including FL network, round/client specifications, and graph creation
 """
 
 from collections import OrderedDict, defaultdict
@@ -34,21 +34,8 @@ import plotly.express as px
 import scipy.cluster.hierarchy as sch
 from scipy.spatial.distance import squareform
 
-
-# 1) Raise Flower/Ray logger levels
-#for name in [
-#    "flwr", "flwr.server", "flwr.simulation", "flwr.common",
-#    "ray", "ray.worker", "ray._private"
-#]:
-#    logging.getLogger(name).setLevel(logging.ERROR)
-
-# 2) Stop Flower’s console handler from emitting INFO
-#console_handler.setLevel(logging.ERROR)
-
-
-ro = 500 #Number of rounds
-csv_path = '/data/LorenzoData/NFCS2021StateData220627.csv' #CSV Path
-#ada = True #Adam Optimizer Strategy Boolean
+ro = 200 #Number of rounds
+csv_path = '/data/LorenzoData/NFCS2021StateData220627.csv' #CSV Path for data reading
 
 feature_names = [
     "Gender/Age Bin by Gender",
@@ -100,126 +87,6 @@ from logging import ERROR
 backend_setup = {"init_args": {"logging_level": ERROR, "log_to_driver": False, "local_mode": False}} #run everything in-process
 
 
-class SimpleModel(nn.Module):
-    def __init__(self):
-        super(SimpleModel, self).__init__()
-        # 38 inputs → 128 hidden
-        self.fc1 = nn.Linear(n_features, 128)
-        self.fc2 = nn.Linear(128, n_classes)
-
-    def forward(self, x):
-        # x will already be shape [batch, n_features], no flatten needed
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-class ImprovedModel(nn.Module): #more powerful and agressive with 4 layers and LeakyRelu instead to prevent zeroing of values
-    def __init__(self):
-        super(ImprovedModel, self).__init__()
-        # 38 inputs → 128 hidden, 4 layers
-        self.fc1 = nn.Linear(n_features, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 64)
-        self.fc4 = nn.Linear(64, n_classes)
-        #Batch Normaliation
-        self.bn1 = nn.BatchNorm1d(256)
-        self.bn2 = nn.BatchNorm1d(128)
-        self.bn3 = nn.BatchNorm1d(64)
-        # 30% Dropout to prevent overfitting
-        self.dropout = nn.Dropout(0.3)
-        #Leaky Relu
-        self.act = nn.LeakyReLU(0.1)
-
-
-    def forward(self, x):
-        # x will already be shape [batch, n_features], no flatten needed, go through neural network
-        x = self.act(self.bn1(self.fc1(x)))
-        x = self.dropout(x)
-        x = self.act(self.bn2(self.fc2(x)))
-        x = self.dropout(x)
-        x = self.act(self.bn3(self.fc3(x)))
-        x = self.dropout(x)
-        x = self.fc4(x)
-        return x
-
-
-
-
-class ResidualModel(nn.Module): #Model with a Skip Connection to learn identity mappings better, stops gradients from vanishing
-    def __init__(self):
-        super(ResidualModel, self).__init__()
-        # first projection
-        self.fc_in = nn.Linear(n_features, 128)
-        self.bn_in = nn.BatchNorm1d(128)
-        # residual block 1: 128 → 128 → 128
-        self.res1 = nn.Sequential(
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.3),
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
-        )
-        # residual block 2: 128 → 128 → 128
-        self.res2 = nn.Sequential(
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.3),
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
-        )
-        # final classifier
-        self.fc_out = nn.Linear(128, n_classes)
-
-    def forward(self, x):
-        # input → hidden
-        x = F.leaky_relu(self.bn_in(self.fc_in(x)), 0.1)
-        # block 1 with skip
-        r1 = self.res1(x)
-        x = F.leaky_relu(x + r1, 0.1)
-        # block 2 with skip
-        r2 = self.res2(x)
-        x = F.leaky_relu(x + r2, 0.1)
-        # to logits
-        return self.fc_out(x)
-
-
-
-class HighwayLayer(nn.Module):
-    def __init__(self, size, f=F.relu):
-        super().__init__()
-        self.transform = nn.Linear(size, size)
-        self.gate      = nn.Linear(size, size)
-        self.activation = f
-
-    def forward(self, x):
-        T = torch.sigmoid(self.gate(x))          # transform gate, a sigmoid between (0,1)
-        H = self.activation(self.transform(x))    # candidate transform, the 'new features'
-        return H * T + x * (1 - T)                # highway combination, x is the carry input and (1 - T) is the carry gate (opposite of transform kinda)
-
-class HighwayModel(nn.Module): # an evolved version of ResidualModel by learning, for each feature, whether to transform it or carry forward
-    def __init__(self, num_highways=2):
-        super(HighwayModel, self).__init__()
-        self.input = nn.Sequential(
-            nn.Linear(n_features, 128),
-            nn.BatchNorm1d(128),
-            nn.LeakyReLU(0.1),
-        )
-        self.highways = nn.ModuleList([
-            HighwayLayer(128, f=F.leaky_relu) for _ in range(num_highways)
-        ])
-        self.dropout = nn.Dropout(0.3)
-        self.out = nn.Linear(128, n_classes)
-
-    def forward(self, x):
-        x = self.input(x)
-        for hw in self.highways:
-            x = hw(x)
-            x = self.dropout(x)
-        return self.out(x)
-
-
 class HighwayLayer2(nn.Module):
     def __init__(self, size: int, activation: nn.Module):
         """
@@ -235,7 +102,7 @@ class HighwayLayer2(nn.Module):
         H = self.activation(self.transform(x))    # transformed features
         return H * T + x * (1 - T)                # combine
 
-class HighwayModel2(nn.Module):
+class HighwayModel2(nn.Module): #Highway model implementation
     def __init__(
         self,
         n_features: int,
@@ -268,135 +135,40 @@ class HighwayModel2(nn.Module):
         return self.out(x)
 
 
-
-
-class TabularTransformer(nn.Module):
-    def __init__(
-        self,
-        n_features: int,
-        n_classes: int,
-        embed_dim: int = 32,
-        n_heads: int = 4,
-        mlp_ratio: float = 2.0,
-        depth: int = 2,
-        dropout: float = 0.1,
-    ):
-        """
-        A Transformer-style encoder over features-as-tokens.
-
-        Args:
-            n_features: number of input features (continuous columns).
-            n_classes: number of output classes.
-            embed_dim: embedding dimension per feature token.
-            n_heads: number of attention heads.
-            mlp_ratio: ratio for the Feed-Forward hidden dim (embed_dim * mlp_ratio).
-            depth: number of Transformer encoder layers.
-            dropout: dropout rate.
-        """
-        super().__init__()
-        self.n_features = n_features
-        # Project each scalar feature into a token embedding
-        self.feature_embed = nn.Linear(1, embed_dim)
-        # Learnable positional embeddings to distinguish feature indices
-        self.pos_embed = nn.Parameter(torch.zeros(1, n_features, embed_dim))
-        # Stack of Transformer encoder layers
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim,
-            nhead=n_heads,
-            dim_feedforward=int(embed_dim * mlp_ratio),
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True,      # since PyTorch 1.9: inputs are (B, S, E)
-        )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=depth)
-        # Final classifier: flatten all tokens
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(embed_dim * n_features),
-            nn.Linear(embed_dim * n_features, n_classes)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x: (batch_size, n_features)
-        """
-        B, F = x.size()
-        assert F == self.n_features
-
-        # turn (B, F) → (B, F, 1) → embed → (B, F, embed_dim)
-        x = x.unsqueeze(-1)
-        x = self.feature_embed(x)
-        # add pos embeddings
-        x = x + self.pos_embed
-
-        # Transformer over the feature tokens
-        # shape remains (B, F, embed_dim)
-        x = self.encoder(x)
-
-        # flatten tokens, classify
-        x = x.reshape(B, -1)
-        return self.classifier(x)
-
-
-def train_model(model, train_set, epochz):
+def train_model(model, train_set, epochz): #code to handle model training
     batch_size = 64
     num_epochs = epochz
 
-    
-    #train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     # ——— handle class imbalance ———
     # 1) Extract all labels from the TensorDataset
-    #    train_set.tensors == (features_tensor, labels_tensor)
     labels_tensor = train_set.tensors[1]               # shape [N]
 
     # 2) Compute class counts and invert
     class_counts = torch.bincount(labels_tensor, minlength=n_classes)
     zero_ids = (class_counts == 0).nonzero().flatten().tolist()
-    #if zero_ids:
-    #    print(f"[train_model] warning: no data for classes {zero_ids}, setting weight=0")
     class_weights = torch.zeros_like(class_counts, dtype=torch.float)
+
     # 3) Only invert the nonzero counts:
     nonzero = class_counts > 0
     class_weights[nonzero] = 1.0 / class_counts[nonzero].float()
-    #class_weights = class_weights.clamp(max=30)
 
-    # 3a) Weighted loss, boosted to counteract oversampled data
-    #if ada == False:
-    #    boosted_weights = (class_weights**1.01).clamp(max=100.0) # boost weight power prevent from going to infinity, SGD style
-    #else:
-    boosted_weights = (class_weights**1.1835).clamp(max=100.0) # Adam style, 1.1905 for 50 rounds is good
-
+    boosted_weights = (class_weights**1.1835).clamp(max=100.0) #Weight boosting
 
     criterion = nn.CrossEntropyLoss(weight=boosted_weights)
-
-    # 3b) (optional) Oversample minority classes via sampler
-    sample_weights = class_weights[labels_tensor]       # shape [N]
-    #sampler = WeightedRandomSampler(
-    #    weights=sample_weights,
-    #    num_samples=len(sample_weights),
-    #    replacement=True,
-    #)
 
     # Use the sampler instead of shuffle for balanced batches
     train_loader = DataLoader(
         train_set,
         batch_size=batch_size,
-        #sampler=sampler,
         shuffle = True,
     )
 
-
-    #criterion = nn.CrossEntropyLoss()
-    #if ada == False:
-    #    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    #else:
-    optimizer = optim.Adam(model.parameters(), lr=0.005)
-
-
+    optimizer = optim.Adam(model.parameters(), lr=0.005) #Adam optimizer
 
     model.train()
     best_loss = float("inf")
     stagnant_epochs = 0
-    patience = 5  # stop after 3 non‐improving epochs
+    patience = 5  # Epoch Stopping: stop after 5 non‐improving epochs
     for epoch in range(num_epochs):
         running_loss = 0.0
         for inputs, labels in train_loader:
@@ -411,20 +183,12 @@ def train_model(model, train_set, epochz):
         if avg_loss < best_loss:
             best_loss = avg_loss
             stagnant_epochs = 0
-            #log(INFO, f"Early Stopper: Improvement Made! Reset patience")
         else:
             stagnant_epochs += 1
-            #log(INFO, f"Early Stopper: No improvement for {stagnant_epochs} epoch(s)")
             if stagnant_epochs >= patience:
-                #log(INFO, f"Early Stopper: Stopping on epoch {epoch+1}")
                 break #stop going through Epochs
 
-
-
-
-
-
-def evaluate_model(model, test_set):
+def evaluate_model(model, test_set): #Model evaluation code, calculates 4 metrics per round as well as average loss
     model.eval()
     correct = 0
     total = 0
@@ -460,25 +224,9 @@ def evaluate_model(model, test_set):
     f1 = f1_score(allLab, allPred, average="binary", pos_label=1)
     auc = roc_auc_score(allLab, allProb)
 
-    # print(f"Test Accuracy: {accuracy:.4f}, Average Loss: {average_loss:.4f}")
     return average_loss, accuracy, recall, f1, auc
 
-
-def include_digits(dataset, included_digits):
-    including_indices = [
-        idx for idx in range(len(dataset)) if dataset[idx][1] in included_digits
-    ]
-    return torch.utils.data.Subset(dataset, including_indices)
-
-
-def exclude_digits(dataset, excluded_digits):
-    including_indices = [
-        idx for idx in range(len(dataset)) if dataset[idx][1] not in excluded_digits
-    ]
-    return torch.utils.data.Subset(dataset, including_indices)
-
-
-def compute_confusion_matrix(model, testset):
+def compute_confusion_matrix(model, testset): #Function to compute matrix used in confusion plot
     # Initialize lists to store true labels and predicted labels
     true_labels = []
     predicted_labels = []
@@ -503,7 +251,7 @@ def compute_confusion_matrix(model, testset):
     return cm
 
 
-def plot_confusion_matrix(cm, title, path=None):
+def plot_confusion_matrix(cm, title, path=None): #Plot using matrix calculated above
     plt.figure(figsize=(6, 4))
     sns.heatmap(cm, annot=True, cmap="Blues", fmt="d",xticklabels = ["Yes", "No"],yticklabels = ["Yes", "No"], linewidths=0.5)
     plt.title(title)
@@ -519,110 +267,8 @@ def plot_confusion_matrix(cm, title, path=None):
     plt.savefig(save_path, bbox_inches='tight')
     plt.close()
 
-
-def plot_accuracy_graph(round_accuracies, title, path=None):
-    steps = max(1, math.ceil(ro//30))
-    rounds = list(range(1, len(round_accuracies), steps))
-    fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_accuracies[1:][::steps], marker="o")
-    ax.set_title(title)
-    ax.set_xlabel("Round")
-    ax.set_ylabel("Global Accuracy")
-    ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
-    ax.set_xticks(rounds)
-    ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
-    ax.set_ylim(0, 1)
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
-    plt.show()
-    if path is None:
-        o = os.path.dirname(csv_path)
-    else:
-        o = path
-
-    save_path = os.path.join(o, "accuracy.pdf")
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
-
-
-
-def plot_recall_graph(round_recalls, title, path=None):
-    steps = max(1, math.ceil(ro//30))
-    rounds = list(range(1, len(round_recalls), steps))
-    fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_recalls[1:][::steps], marker="o")
-    ax.set_title(title)
-    ax.set_xlabel("Round")
-    ax.set_ylabel("Global Recall")
-    ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
-    ax.set_xticks(rounds)
-    ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
-    ax.set_ylim(0, 1)
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
-    plt.show()
-    if path is None:
-        o = os.path.dirname(csv_path)
-    else:
-        o = path
-
-    save_path = os.path.join(o, "recall.pdf")
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
-
-
-def plot_f1_graph(round_f1s, title, path=None):
-    steps = max(1, math.ceil(ro//30))
-    rounds = list(range(1, len(round_f1s), steps))
-    fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_f1s[1:][::steps], marker="o")
-    ax.set_title(title)
-    ax.set_xlabel("Round")
-    ax.set_ylabel("Global F1")
-    ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
-    ax.set_xticks(rounds)
-    ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
-    ax.set_ylim(0, 1)
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
-    plt.show()
-    if path is None:
-        o = os.path.dirname(csv_path)
-    else:
-        o = path
-
-    save_path = os.path.join(o, "f1.pdf")
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
-
-
-def plot_auc_graph(round_aucs, title, path=None):
-    steps = max(1, math.ceil(ro//30))
-    rounds = list(range(1, len(round_aucs), steps))
-    fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
-    ax.plot(rounds, round_aucs[1:][::steps], marker="o")
-    ax.set_title(title)
-    ax.set_xlabel("Round")
-    ax.set_ylabel("Global AUC")
-    ax.grid(True)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
-    ax.set_xticks(rounds)
-    ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
-    ax.set_ylim(0, 1)
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
-    plt.show()
-    if path is None:
-        o = os.path.dirname(csv_path)
-    else:
-        o = path
-
-    save_path = os.path.join(o, "auc.pdf")
-    plt.savefig(save_path, bbox_inches='tight')
-    plt.close()
-
-
-def plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, title, path=None):
-    step = max(1, math.ceil(ro//30))
+def plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, title, path=None): #Plot all metrics of global model across all rounds
+    step = max(1, math.ceil(ro//25)) #Step over some rounds for spacing
     rounds = list(range(1, len(round_f1s), step))
     # Subsample metrics to match 'rounds'
     accs = round_accuracies[1::step]
@@ -630,7 +276,7 @@ def plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, title, path
     f1s = round_f1s[1::step]
     aucs = round_aucs[1::step]
 
-    fig, ax = plt.subplots(figsize=(max(min(ro/4,14), 4), 4))
+    fig, ax = plt.subplots(figsize=(max(min(lon(rounds)/4,14), 4), 4))
     ax.plot(rounds, accs, marker="o", label="Precision", color="tab:red")
     ax.plot(rounds, recalls, marker="s", label="Recall", color="tab:blue")
     ax.plot(rounds, f1s, marker="^", label="F1", color="tab:green")
@@ -639,8 +285,8 @@ def plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, title, path
     ax.set_xlabel("Round")
     ax.set_ylabel("Global Metric")
     ax.grid(True)
-    ax.legend(loc="lower left", title="Metrics")
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30)))) #Instead of every round do every tot/25 rounds
+    ax.legend(loc="lower right", title="Metrics")
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//25)))) #Instead of every round do every tot/25 rounds
     ax.set_xticks(rounds)
     ax.set_xlim(rounds[0], rounds[-1]) #CLAMPER
     ax.set_ylim(0, 1)
@@ -658,18 +304,13 @@ def plot_all(round_accuracies, round_recalls, round_f1s, round_aucs, title, path
     plt.savefig(save_path, bbox_inches='tight')
     plt.close()
 
-def plot_all_client(
+def plot_all_client( #Client-specific metric plot
     state_name: str,
     history: Dict[str, List[float]],
     path: Optional[str] = None,
 ) -> None:
-    """
-    Plot accuracy, recall, F1 and AUC for a single state over rounds.
-    `history` should be a dict with keys "accuracy","recall","f1","auc"
-    each mapping to a list of length = num_rounds+1 (including round 0).
-    """
-    # Rounds 0,1,2,...,N
-    step = max(1, math.ceil(ro//30))
+    
+    step = max(1, math.ceil(ro//25))
     rounds = list(range(1, len(history["accuracy"]), step))
     # Subsample metrics to match 'rounds'
     accs = history["accuracy"][1::step]
@@ -678,7 +319,7 @@ def plot_all_client(
     aucs = history["auc"][1::step]
 
     fig, ax = plt.subplots(figsize=(min(len(rounds)/4, 14), 4))
-    ax.plot(rounds, accs, marker="o", label="Accuracy")
+    ax.plot(rounds, accs, marker="o", label="Precision")
     ax.plot(rounds, recalls,    marker="s", label="Recall")
     ax.plot(rounds, f1s,        marker="^", label="F1")
     ax.plot(rounds, aucs,       marker="d", label="AUC")
@@ -687,7 +328,7 @@ def plot_all_client(
     ax.set_xlabel("Round")
     ax.set_ylabel("Value")
     ax.set_ylim(0, 1)
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//30))))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(max(1, math.ceil(ro//25))))
     ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
     ax.yaxis.set_major_locator(ticker.MultipleLocator(0.1))
     ax.grid(True)
@@ -704,7 +345,7 @@ def plot_all_client(
     plt.close()
 
 
-def plot_shap_feature_importance(
+def plot_shap_feature_importance( #Plot SHAP feature importance and STD for global model
     model: nn.Module,
     dataset: torch.utils.data.TensorDataset,
     feature_names: List[str],
@@ -760,16 +401,13 @@ def plot_shap_feature_importance(
         stds.append(group_sample.std(axis=0).sum())
         start += size
 
-    #print("DEBUG cat_sizes len:", len(cat_sizes), "values:", cat_sizes)
-    #print("DEBUG groups len:", len(groups))
-    #print("DEBUG feature_names len:", len(feature_names), "values:", feature_names)
     assert len(groups) == len(feature_names), "Mismatch groups vs feature_names"
 
-    covs = [#Relative variation
+    covs = [#Relative variation, is probably not to-scale due to very large STD value compared to SHAP numbers
         (s / m) if m != 0 else 0.0
         for m, s in zip(groups, stds)
     ]
-    #covs = covs / max(covs) #make as a unit figure?
+    #covs = covs / max(covs) #optional to make as unit figure
 
 
     # 7) plot
@@ -777,13 +415,6 @@ def plot_shap_feature_importance(
     bars = ax.bar(
     feature_names,
     groups,
-    #yerr=covs,
-    #capsize=4,
-    #error_kw={
-    #    "ecolor": "black",    # errorbar color
-    #    "elinewidth": 1,      # errorbar line width
-    #    "alpha": 0.4          # make the error‐bars semi‐transparent
-    #},
 )
     ax.set_xticklabels(feature_names, rotation=45, ha="right")
     ax.set_title(title)
@@ -810,7 +441,7 @@ def plot_shap_feature_importance(
     plt.close(fig)
 
 
-def plot_shap_feature_importance_client(
+def plot_shap_feature_importance_client( #Client-specific SHAP plot
     model: nn.Module,
     dataset: torch.utils.data.TensorDataset,
     feature_names: List[str],
@@ -877,13 +508,6 @@ def plot_shap_feature_importance_client(
     bars = ax.bar(
     feature_names,
     groups,
-    #yerr=covs,
-    #capsize=4,
-    #error_kw={
-    #    "ecolor": "black",    # errorbar color
-    #    "elinewidth": 1,      # errorbar line width
-    #    "alpha": 0.4          # make the error‐bars semi‐transparent
-    #},
 )
     ax.set_xticklabels(feature_names, rotation=45, ha="right")
     ax.set_title(title)
@@ -903,16 +527,11 @@ def plot_shap_feature_importance_client(
             fontsize=8,
         )
 
-
     fname = os.path.join(out_dir, f"{state_name}_feature_importance.pdf")
     fig.savefig(fname, bbox_inches="tight")
     plt.close(fig)
 
-
-
-
-
-def plot_scatter(
+def plot_scatter( #Scatterplot, used for Client Plotting to see general trend and outliers
     state_names: list[str],
     accs: list[float],
     recs: list[float],
@@ -965,131 +584,7 @@ def plot_scatter(
     fig.savefig(fp, bbox_inches="tight")
     plt.close(fig)
 
-
-
-
-
-
-
-
-def plot_shap_summary_grouped(
-    model: nn.Module,
-    dataset: torch.utils.data.TensorDataset,
-    max_examples: int = 2000,
-    background_size: int = 200,
-    nsamples: int = 200,
-    path: Optional[str] = None,
-    file_name: str = "shap_summary_grouped.pdf",
-):
-    """
-    Produce a SHAP summary (beeswarm) plot *grouped* over one-hot encoded
-    categorical feature blocks.
-
-    Coloring (feature value) is the argmax index (0..size-1) of the active
-    category inside each one-hot block, giving variation and meaningful color.
-
-    Args:
-        model: Trained PyTorch model.
-        dataset: TensorDataset(features, labels).
-        max_examples: Max samples to compute/plot SHAP for (subsampled if larger).
-        background_size: Size of background set for KernelExplainer.
-        nsamples: SHAP KernelExplainer nsamples parameter.
-        path: Directory to save output (defaults beside csv_path if None).
-        file_name: Output PDF filename.
-    """
-
-    if path is None:
-        out_dir = os.path.dirname(csv_path)
-    else:
-        out_dir = path
-    os.makedirs(out_dir, exist_ok=True)
-
-    X = dataset.tensors[0].cpu().numpy()
-    n_total, input_dim = X.shape
-    assert sum(cat_sizes) == input_dim, (
-        f"Sum of cat_sizes ({sum(cat_sizes)}) != input_dim ({input_dim})"
-    )
-    assert len(cat_sizes) == len(feature_names), (
-        f"cat_sizes length {len(cat_sizes)} != feature_names length {len(feature_names)}"
-    )
-
-    # Subsample for tractability
-    if n_total > max_examples:
-        sel = np.random.choice(n_total, max_examples, replace=False)
-        X_sample = X[sel]
-    else:
-        X_sample = X
-
-    # Background subset
-    if n_total > background_size:
-        bg_idx = np.random.choice(n_total, background_size, replace=False)
-        background = X[bg_idx]
-    else:
-        background = X
-
-    # Prediction function (probability of class 1; adjust if different target)
-    def predict_fn(x_batch: np.ndarray) -> np.ndarray:
-        with torch.no_grad():
-            logits = model(torch.from_numpy(x_batch).float())
-            probs = torch.softmax(logits, dim=1)[:, 1]
-        return probs.cpu().numpy()
-
-    # SHAP KernelExplainer
-    explainer = shap.KernelExplainer(predict_fn, background)
-    shap_vals = explainer.shap_values(X_sample, nsamples=nsamples)
-    # For binary classification shap returns list [class0, class1]
-    if isinstance(shap_vals, list):
-        shap_vals = shap_vals[1]  # (M, input_dim)
-
-    # ---- Aggregate SHAP values over one-hot blocks (mean(abs) per column then sum) ----
-    grouped_shap_rows = []
-    start = 0
-    for size in cat_sizes:
-        end = start + size
-        block = shap_vals[:, start:end]  # (M, size)
-        # Use mean absolute per component then sum to get a single SHAP per group per sample
-        group_shap = block.mean(axis=1)  # shape (M,)
-        grouped_shap_rows.append(group_shap)
-        start = end
-    # Shape: (M, G)
-    grouped_shap = np.vstack(grouped_shap_rows).T
-
-    # ---- Create "feature values" by argmax index inside each one-hot block ----
-    grouped_inputs_rows = []
-    start = 0
-    for size in cat_sizes:
-        end = start + size
-        block = X_sample[:, start:end]  # (M, size) one-hot
-        # Argmax returns index of the active category
-        cat_idx = np.argmax(block, axis=1).astype(float)
-        # (Optional) if a row could be all-zero you could set those to -1:
-        # all_zero = block.sum(axis=1) == 0
-        # cat_idx[all_zero] = -1
-        grouped_inputs_rows.append(cat_idx)
-        start = end
-    grouped_inputs = np.vstack(grouped_inputs_rows).T  # (M, G)
-
-    # ---- Plot summary ----
-    plt.figure(figsize=(8, max(4, 0.55 * len(feature_names))))
-    shap.summary_plot(
-        grouped_shap,
-        features=grouped_inputs,
-        feature_names=feature_names,
-        show=False,
-        plot_type="dot",
-        max_display=len(feature_names),
-        color_bar=True,
-    )
-    plt.title("Grouped SHAP Summary (color = category index)", fontsize=12)
-    out_path = os.path.join(out_dir, file_name)
-    plt.savefig(out_path, bbox_inches="tight")
-    plt.close()
-
-
-
-
-
-def plot_choropleth(
+def plot_choropleth( #Basically same thing as scatterplot but cooler
     state_names: list[str],
     vals: list[float],
     title: str = "Federated Learning by State",
@@ -1167,17 +662,9 @@ def plot_choropleth(
     #    fig.write_image(save_path, width=800, height=500)
     #except Exception as e:
     html_path = os.path.splitext(save_path)[0] + ".html"
-    #print(f"[plot_choropleth] static export failed ({e}). Saving HTML -> {html_path}")
     fig.write_html(html_path)
 
-
-
-
-
-
-
-
-def plot_shap_summary_grouped_owen(
+def plot_feature_bin_summary_grouped_owen( #Plots Feature Summary using Owen Values instead, per each Feature bin
     model: nn.Module,
     dataset: torch.utils.data.TensorDataset,
     max_examples: int = 2000,
@@ -1200,7 +687,107 @@ def plot_shap_summary_grouped_owen(
         for group_name, size in zip(feature_names, cat_sizes):
             for i in range(size):
                 all_feature_names.append(f"{group_name}__{i}")
-        return all_feature_names
+
+            # Step 2: Create a mapping from old names to new, descriptive names
+        rename_map = {
+            "Gender/Age Bin by Gender__0": "Male 18-24 (Gender)",
+            "Gender/Age Bin by Gender__1": "Male 25-34 (Gender)",
+            "Gender/Age Bin by Gender__2": "Male 35-44 (Gender)",
+            "Gender/Age Bin by Gender__3": "Male 45-54 (Gender)",
+            "Gender/Age Bin by Gender__4": "Male 55-64 (Gender)",
+            "Gender/Age Bin by Gender__5": "Male 65+ (Gender)",
+            "Gender/Age Bin by Gender__6": "Female 18-24 (Gender)",
+            "Gender/Age Bin by Gender__7": "Female 25-34 (Gender)",
+            "Gender/Age Bin by Gender__8": "Female 35-44 (Gender)",
+            "Gender/Age Bin by Gender__9": "Female 45-54 (Gender)",
+            "Gender/Age Bin by Gender__10": "Female 55-64 (Gender)",
+            "Gender/Age Bin by Gender__11": "Female 65+ (Gender)",
+            "Gender/Age Bin by Age__0": "Male 18-24 (Age)",
+            "Gender/Age Bin by Age__1": "Female 18-24 (Age)",
+            "Gender/Age Bin by Age__2": "Male 25-34 (Age)",
+            "Gender/Age Bin by Age__3": "Female 25-34 (Age)",
+            "Gender/Age Bin by Age__4": "Male 35-44 (Age)",
+            "Gender/Age Bin by Age__5": "Female 35-44 (Age)",
+            "Gender/Age Bin by Age__6": "Male 45-54 (Age)",
+            "Gender/Age Bin by Age__7": "Female 45-54 (Age)",
+            "Gender/Age Bin by Age__8": "Male 55-64 (Age)",
+            "Gender/Age Bin by Age__9": "Female 55-64 (Age)",
+            "Gender/Age Bin by Age__10": "Male 65+ (Age)",
+            "Gender/Age Bin by Age__11": "Female 65+ (Age)",
+            # ... continue for all your other feature names ...
+            "Education__0": "Did not complete high school",
+            "Education__1": "High school graduate - regular diploma",
+            "Education__2": "High school graduate - GED or alternative credential",
+            "Education__3": "Some college, no degree",
+            "Education__4": "Associate's degree",
+            "Education__5": "Bachelor's degree",
+            "Education__6": "Post graduate degree",
+            "Education__7": "Prefer not to say (Education)",
+            "Living Arrangements__0": "I am only adult in household",
+            "Living Arrangements__1": "I live with my spouse/significant other",
+            "Living Arrangements__2": "I live in my parent's home",
+            "Living Arrangements__3": "I live with other family, friends, or roomates",
+            "Living Arrangements__4": "Prefer not to say (Living Arrangements)",
+            "Financial Children__0": "I have 1 child who is financially dependent",
+            "Financial Children__1": "I have 2 children who are financially dependent",
+            "Financial Children__2": "I have 3 children who are financially dependent",
+            "Financial Children__3": "I have 4+ children who are financially dependent",
+            "Financial Children__4": "I have 0 children who are financially dependent",
+            "Financial Children__5": "I do not have children",
+            "Financial Children__6": "Prefer not to say (Financial Children)", 
+            "Annual Income__0": "Annual Income < $15,000",
+            "Annual Income__1": "$15,000 <= Annual Income < $25,000",
+            "Annual Income__2": "$25,000 <= Annual Income < $35,000",
+            "Annual Income__3": "$35,000 <= Annual Income < $50,000",
+            "Annual Income__4": "$50,000 <= Annual Income < $75,000",
+            "Annual Income__5": "$75,000 <= Annual Income < $100,000",
+            "Annual Income__6": "$100,000 <= Annual Income < $150,000",
+            "Annual Income__7": "$150,000 <= Annual Income < $200,000",
+            "Annual Income__8": "$200,000 <= Annual Income < $300,000",
+            "Annual Income__9": "$300,000 <= Annual Income",
+            "Annual Income__10": "I don't know my Annual Income",
+            "Annual Income__11": "Prefer not to say (Annual Income)",
+            "Employment__0": "Self-Employed",
+            "Employment__1": "Work full-time for employer or military",
+            "Employment__2": "Work part-time for employer or military",
+            "Employment__3": "Homemaker",
+            "Employment__4": "Full-time student",
+            "Employment__5": "Permanently unable to work",
+            "Employment__6": "Unemployed or laid off",
+            "Employment__7": "Retired",
+            "Employment__8": "Prefer not to say (Employment)",
+            "Web/App Help__0": "I frequently get Web/App Help",
+            "Web/App Help__1": "I sometimes get Web/App Help",
+            "Web/App Help__2": "I never get Web/App Help",
+            "Web/App Help__3": "I don't know if I get Web/App Help",
+            "Web/App Help__4": "Prefer not to say (Web/App Help)", 
+            "Stock Investments__0": "I have investments in stocks/bonds/mutual funds",
+            "Stock Investments__1": "I do not have investments in stocks/bonds/mutual funds",
+            "Stock Investments__2": "I do not know if I have investments in stocks/bonds/mutual funds",
+            "Stock Investments__3": "Prefer not to say (Stock Investments)",
+            "Health Insurance__0": "I have Health Insurance",
+            "Health Insurance__1": "I do not have Health Insurance",
+            "Health Insurance__2": "I don't know if I have Health Insurance",
+            "Health Insurance__3": "Prefer not to say (Health Insurance)",
+            "Financial Education__0": "My school had financial education but I did not attend",
+            "Financial Education__1": "My school had financial education and I attended",
+            "Financial Education__2": "My school did not have financial education",
+            "Financial Education__3": "I don't know if my school had financial education",
+            "Financial Education__4": "Prefer not to say (Financial Education)",
+            "Marital Status__0": "?arried",
+            "Marital Status__1": "Single",
+            "Marital Status__2": "Separated",
+            "Marital Status__3": "Divorced",
+            "Marital Status__4": "Widowed/Widower",
+            "Marital Status__5": "Prefer not to say (Marital Status)",
+        }
+
+        # Step 3: Create and return a new list with the renamed features.
+        # The .get(name, name) method looks up the new name in the map.
+        # If a name isn't in the map, it defaults to using the original name.
+        renamed_features = [rename_map.get(name, name) for name in all_feature_names]
+
+        return renamed_features
 
     all_feature_names = generate_detailed_feature_names(cat_sizes, feature_names)
 
@@ -1269,40 +856,7 @@ def plot_shap_summary_grouped_owen(
         plt.savefig(out_path, bbox_inches="tight")
         plt.close()
 
-
-
-
-
-
-
-
-
-#Owen grouping by feature
-def group_owen_values(owen_values: np.ndarray):
-    """
-    Given Owen values per feature (shape [n_samples, 84]),
-    returns grouped Owen values by original categorical feature
-    (shape [n_samples, 12]).
-    """
-    # Category sizes in the same order as one-hot encoding
-
-    # Build start-end indices for each group
-    indices = []
-    start = 0
-    for size in cat_sizes:
-        end = start + size
-        indices.append((start, end))
-        start = end
-
-    # Sum (or mean) Owen values across each group
-    grouped = np.stack([
-        np.abs(owen_values[:, start:end]).sum(axis=1)  # or mean(axis=1)
-        for start, end in indices
-    ], axis=1)
-
-    return grouped
-
-def plot_shap_summary_grouped_owen2(
+def plot_feature_summary_grouped_owen( #Plots owen feature summary for overall features instead of feature bins as above, basically aggregates them and puts them similar to SHAP
     model: nn.Module,
     dataset: torch.utils.data.TensorDataset,
     max_examples: int = 2000,
@@ -1327,8 +881,6 @@ def plot_shap_summary_grouped_owen2(
 
     # Convert background and X to DataFrame for clustering
     X_df = pd.DataFrame(X)
-    #Tentative remove useless columns, might not work
-    #X_df = X_df.loc[:, X_df.std() > 0]
     background_df = pd.DataFrame(background)
 
     # Step 1: Create correlation-based feature clustering
@@ -1382,8 +934,64 @@ def plot_shap_summary_grouped_owen2(
     plt.title("Grouped Owen Value Summary Plot")
     plt.tight_layout()
 
-
     # Save to PDF
+    out_path = os.path.join(path, file_name)
+    plt.savefig(out_path, bbox_inches="tight")
+    plt.close()
+
+def plotCommunication( #Communication Costs Graph, kinda bad but it's generally used to see values
+    client_costs: List[Dict[str, float]],
+    path: Optional[str] = None,
+    file_name: str = "client_communication_costs.pdf",
+    in_mb: bool = False
+) -> None:
+    """
+    Plots a stacked bar chart of upload and download communication costs per client.
+
+    Args:
+        client_costs: A list of dicts where each dict has 'upload' and 'download' in KB.
+        path: Optional output path. Defaults to current directory.
+        file_name: Output PDF filename.
+        in_mb: If True, converts KB to MB for plotting.
+    """
+    state_abbrev = {
+        'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+        'Colorado':'CO','Connecticut':'CT','Delaware':'DE','District of Columbia':'DC',
+        'Florida':'FL','Georgia':'GA','Hawaii':'HI','Idaho':'ID','Illinois':'IL',
+        'Indiana':'IN','Iowa':'IA','Kansas':'KS','Kentucky':'KY','Louisiana':'LA',
+        'Maine':'ME','Maryland':'MD','Massachusetts':'MA','Michigan':'MI',
+        'Minnesota':'MN','Mississippi':'MS','Missouri':'MO','Montana':'MT',
+        'Nebraska':'NE','Nevada':'NV','New Hampshire':'NH','New Jersey':'NJ',
+        'New Mexico':'NM','New York':'NY','North Carolina':'NC','North Dakota':'ND',
+        'Ohio':'OH','Oklahoma':'OK','Oregon':'OR','Pennsylvania':'PA',
+        'Rhode Island':'RI','South Carolina':'SC','South Dakota':'SD',
+        'Tennessee':'TN','Texas':'TX','Utah':'UT','Vermont':'VT','Virginia':'VA',
+        'Washington':'WA','West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY'
+    }
+    unit = "MB" if in_mb else "KB"
+    scale = 1 / 1024 if in_mb else 1
+
+    # Generate state abbreviation labels
+    state_labels = list(state_abbrev.values())
+    if path is None:
+        path = os.path.dirname(csv_path)
+
+    # Get corresponding abbreviations (used as x-axis labels)
+    clients = list(range(len(client_costs)))
+    uploads = [client_costs[c]["upload"] * scale for c in clients]
+    #downloads = [client_costs[c]["download"] * scale for c in clients]
+
+    plt.figure(figsize=(18, 6))
+    plt.bar(clients, uploads, label="1-Way Communication Cost", alpha=0.7)
+    #plt.bar(clients, downloads, label="Download", alpha=0.7, bottom=uploads)
+    plt.xlabel("Client ID")
+    plt.ylabel(f"Communication ({unit})")
+    plt.title("Communication Cost per Client")
+    # Set x-axis ticks to state abbreviations
+    plt.xticks(clients, state_labels, rotation=90, fontsize=8)
+    plt.legend()
+    plt.tight_layout()
+
     out_path = os.path.join(path, file_name)
     plt.savefig(out_path, bbox_inches="tight")
     plt.close()
