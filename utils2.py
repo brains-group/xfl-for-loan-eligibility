@@ -34,8 +34,8 @@ import plotly.express as px
 import scipy.cluster.hierarchy as sch
 from scipy.spatial.distance import squareform
 
-ro = 200 #Number of rounds
-csv_path = '/data/LorenzoData/NFCS2021StateData220627.csv' #CSV Path for data reading
+ro = 200 # number of rounds
+csv_path = '/data/NFCS2021StateData220627.csv' # pathway to CSV file, update as necessary
 
 feature_names = [
     "Gender/Age Bin by Gender",
