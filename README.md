@@ -1,5 +1,7 @@
 # Federated Learning with Explainability for U.S. State-Level Financial Distress Modeling
 
+> **📄 Research Paper:** [Federated Learning with Explainability for U.S. State-Level Financial Distress Modeling](XAI_FIN25_FINRA_FL.pdf)
+
 This repository contains the code and resources for the research paper, "Federated Learning with Explainability for U.S. State-Level Financial Distress Modeling." [cite_start]We present 3 frameworks that uses cross-silo Federated Learning (FL), Centralized Learning, and Local modeling to predict consumer financial distress across all 50 U.S. states and the District of Columbia[cite: 23]. [cite_start]The system leverages the U.S. National Financial Capability Study (NFCS) dataset without centralizing sensitive personal data, treating each state as a distinct data silo[cite: 23, 24].
 
 [cite_start]Our approach integrates an 8-layer Highway Network, specifically tailored for imbalanced and highly categorical survey data, with advanced explainable AI (XAI) techniques like SHAP and Owen values. This allows for the identification of both nationwide (global) and state-specific (local) predictors of financial hardship, providing a scalable, regulation-compliant blueprint for early warning systems in finance.
@@ -34,7 +36,12 @@ This repository contains the code and resources for the research paper, "Federat
     ```
     You can safely detach from this session (`Ctrl+b`, then `d`) and re-attach later (`tmux attach -t fl_finance`).
 
-4.  Upgrade pip and install all the required Python packages including `torch`, `flwr[simulation]`, `ray`, `scikit-learn`, `matplotlib`, `pytorch-tabnet`, and `shap`.
+4.  **Install Dependencies**
+    Upgrade pip and install all required Python packages:
+    ```bash
+    pip install --upgrade pip
+    pip install torch flwr[simulation] ray scikit-learn matplotlib pytorch-tabnet shap
+    ```
 
 ### Acquiring the Dataset
 
@@ -44,18 +51,50 @@ This project uses the **2021 National Financial Capability Study (NFCS)** datase
 
 ## Codebase Organization
 
-root_directory
-├── data/                       # Dataset directory, use to contain both the raw CSV file as well as all the processed figures.
-├── FLT_Loader2.py 				# Script to load CSV file and store data for FL model.
-├── FLT_LoaderC.py              # Script to load CSV file and store data for centralized model.
-├── FLT_LoaderC2.py              # Script to load CSV file and store data for local model.
-├── FLT_Server2.py 				# Script to simulate Flower-based client-server interaction, as well as model evaluation, INFO logging, and function-calling.
-├── FLT_ServerC.py              # Script to simulate centralized learning
-├── FLT_ServerC2.py              # Script to simulate localized learning
-├── README.mb 					# this README file.
-├── utils2.py 					# General utility functions, including the Highway Network, figure creation, and evaluation.
-├── utilsC.py                   # Simplified utility functions for centralized, with updated attributes and less functions.
-├── utilsC2.py                   # Simplified utility functions for localized, with updated attributes and less functions.
+The project structure is organized as follows:
+
+```
+.
+├── data/                          # Dataset directory (contains raw CSV and processed figures)
+│
+├── FLT_Loader2.py                 # Data loader for Federated Learning model
+├── FLT_LoaderC.py                 # Data loader for Centralized Learning model
+├── FLT_LoaderC2.py                # Data loader for Local Learning model
+│
+├── FLT_Server2.py                 # Federated Learning server (Flower-based simulation)
+│                                   # Handles client-server interaction, model evaluation,
+│                                   # INFO logging, and function-calling
+├── FLT_ServerC.py                 # Centralized Learning server
+├── FLT_ServerC2.py                # Local Learning server
+│
+├── utils2.py                      # Utility functions for FL model
+│                                   # Includes Highway Network, figure creation, and evaluation
+├── utilsC.py                      # Utility functions for Centralized model
+│                                   # Simplified version with updated attributes
+├── utilsC2.py                     # Utility functions for Local model
+│                                   # Simplified version with updated attributes
+│
+├── XAI_FIN25_FINRA_FL.pdf         # Research paper
+├── README.md                      # This file
+└── LICENSE                        # License file
+```
+
+### File Descriptions
+
+**Data Loaders:**
+- `FLT_Loader2.py` - Loads and prepares data for federated learning training
+- `FLT_LoaderC.py` - Loads and prepares data for centralized learning training
+- `FLT_LoaderC2.py` - Loads and prepares data for local learning training
+
+**Server Scripts:**
+- `FLT_Server2.py` - Simulates federated learning with Flower framework
+- `FLT_ServerC.py` - Simulates centralized learning approach
+- `FLT_ServerC2.py` - Simulates localized learning approach
+
+**Utilities:**
+- `utils2.py` - Core utilities for FL model (Highway Network, evaluation, visualization)
+- `utilsC.py` - Utilities for centralized model (simplified)
+- `utilsC2.py` - Utilities for local model (simplified)
 
 ---
 
@@ -64,7 +103,13 @@ root_directory
 Ensure your virtual environment is activated (`source .venv/bin/activate`) before running any commands. Scripts should be run as modules from the project root to handle imports correctly.
 
 ### 1. Run Federated Learning
-Initiate the federated training simulation by calling FLT_Server2.py via python3. This will train the global model with default settings (200 rounds, 51 clients, ect). The final model parameters are not saved. The same can be done for FLT_ServerC.py and FLT_ServerC2.py to train their respective models.
+Initiate the federated training simulation by calling `FLT_Server2.py` via python3. This will train the global model with default settings (200 rounds, 51 clients, etc.). The final model parameters are not saved. The same can be done for `FLT_ServerC.py` and `FLT_ServerC2.py` to train their respective models.
+
+```bash
+python3 FLT_Server2.py    # Federated Learning
+python3 FLT_ServerC.py     # Centralized Learning
+python3 FLT_ServerC2.py   # Local Learning
+```
 
 ### 2. Evaluate Results
-All figures and results are automatically stored into the same directory as the CSV (which by default is assumed to be data\), skim through the utils file to view/change result file names.
+All figures and results are automatically stored in the `data/` directory (same location as the CSV file). To view or change result file names, check the respective utility files (`utils2.py`, `utilsC.py`, `utilsC2.py`).
